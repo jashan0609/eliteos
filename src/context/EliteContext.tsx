@@ -28,6 +28,14 @@ export interface Habit {
   streak: number;
 }
 
+export interface DailyPerformanceLog {
+  date: string;
+  nnSummary: { title: string; completed: boolean }[];
+  habitSummary: { title: string; completed: boolean }[];
+  totalXpAtTime: number;
+  penalty: number;
+}
+
 interface EliteState {
   xp: number;
   streak: number;
@@ -37,6 +45,7 @@ interface EliteState {
   objectives: Objective[];
   dailyHabits: Habit[];
   nonNegotiables: Habit[];
+  logs: DailyPerformanceLog[];
 }
 
 interface EliteContextValue extends EliteState {
@@ -80,6 +89,7 @@ const DEFAULT_STATE: EliteState = {
   objectives: SEED_OBJECTIVES,
   dailyHabits: [],
   nonNegotiables: [],
+  logs: [],
 };
 
 const STORAGE_KEY = "elite-state";
@@ -137,19 +147,41 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         const today = getToday();
         const yesterday = getYesterday();
 
-        // Detect new day — run daily reset & penalty
-        const hasItems = saved.dailyHabits.length > 0 || saved.nonNegotiables.length > 0;
+        // Ensure logs array exists (migration)
+        if (!saved.logs) saved.logs = [];
+
+        // Detect new day — archive snapshot, then reset & penalize
+        const hasItems =
+          saved.dailyHabits.length > 0 || saved.nonNegotiables.length > 0;
         if (saved.lastHabitReset !== today && hasItems) {
+          // ── Archive yesterday's performance BEFORE resetting ──
           let penalty = 0;
 
-          // Non-negotiables: -60 XP per incomplete
-          const updatedNNs = saved.nonNegotiables.map((h) => {
+          const nnSummary = saved.nonNegotiables.map((h) => {
             if (!h.completedToday) penalty += 60;
+            return { title: h.title, completed: h.completedToday };
+          });
+
+          const habitSummary = saved.dailyHabits.map((h) => ({
+            title: h.title,
+            completed: h.completedToday,
+          }));
+
+          const logDate = saved.lastHabitReset || yesterday;
+          const snapshot: DailyPerformanceLog = {
+            date: logDate,
+            nnSummary,
+            habitSummary,
+            totalXpAtTime: saved.xp,
+            penalty,
+          };
+
+          // ── Now reset for the new day ──
+          const updatedNNs = saved.nonNegotiables.map((h) => {
             const newStreak = h.completedToday ? h.streak + 1 : 0;
             return { ...h, completedToday: false, streak: newStreak };
           });
 
-          // Daily habits: no penalty, just reset
           const updatedDaily = saved.dailyHabits.map((h) => {
             const newStreak = h.completedToday ? h.streak + 1 : 0;
             return { ...h, completedToday: false, streak: newStreak };
@@ -168,6 +200,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
 
           saved = {
             ...saved,
+            logs: [snapshot, ...saved.logs],
             nonNegotiables: updatedNNs,
             dailyHabits: updatedDaily,
             xp: Math.max(0, saved.xp - penalty),
@@ -335,20 +368,51 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     []
   );
 
-  const incrementObjectiveProgress = useCallback((id: string) => {
-    setState((prev) => ({
-      ...prev,
-      objectives: prev.objectives.map((o) => {
-        if (o.id !== id) return o;
-        const next = Math.min(o.progress + 10, 100);
+  const incrementObjectiveProgress = useCallback(
+    (id: string) => {
+      setState((prev) => {
+        const obj = prev.objectives.find((o) => o.id === id);
+        if (!obj || obj.status === "Completed") return prev;
+
+        const next = Math.min(obj.progress + 10, 100);
+        const justCompleted = next === 100 && obj.status === "Active";
+        const xpReward = justCompleted
+          ? obj.type === "north-star"
+            ? 500
+            : 200
+          : 0;
+
         return {
-          ...o,
-          progress: next,
-          status: next === 100 ? "Completed" : o.status,
+          ...prev,
+          xp: prev.xp + xpReward,
+          objectives: prev.objectives.map((o) =>
+            o.id === id
+              ? {
+                  ...o,
+                  progress: next,
+                  status: justCompleted ? "Completed" : o.status,
+                }
+              : o
+          ),
         };
-      }),
-    }));
-  }, []);
+      });
+
+      // Toast outside setState to avoid stale closure issues
+      const obj = state.objectives.find((o) => o.id === id);
+      if (obj && obj.status === "Active") {
+        const next = Math.min(obj.progress + 10, 100);
+        if (next === 100) {
+          const reward = obj.type === "north-star" ? 500 : 200;
+          const label =
+            obj.type === "north-star"
+              ? "NORTH_STAR_ACHIEVED"
+              : "SPRINT_COMPLETE";
+          showToast("gain", reward, `${label}: +${reward} XP`);
+        }
+      }
+    },
+    [showToast, state.objectives]
+  );
 
   const value: EliteContextValue = {
     ...state,

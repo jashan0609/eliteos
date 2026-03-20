@@ -7,7 +7,7 @@ import Sidebar from "@/components/Sidebar";
 import Header from "@/components/Header";
 import Dashboard from "@/components/Dashboard";
 
-export type TabId = "dashboard" | "objectives" | "ghost" | "habits";
+export type TabId = "dashboard" | "objectives" | "ghost" | "habits" | "logs";
 
 export default function Home() {
   const [booted, setBooted] = useState(false);

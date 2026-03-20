@@ -7,6 +7,9 @@ import {
   Ghost,
   CheckCircle,
   ShieldAlert,
+  BookOpen,
+  Check,
+  X,
 } from "lucide-react";
 import type { TabId } from "@/app/page";
 import { useElite } from "@/context/EliteContext";
@@ -41,6 +44,12 @@ const TAB_CONTENT: Record<
     icon: CheckCircle,
     accent: "text-cyan",
   },
+  logs: {
+    title: "System Logs",
+    subtitle: "Daily performance archive and history",
+    icon: BookOpen,
+    accent: "text-muted",
+  },
 };
 
 interface DashboardProps {
@@ -48,7 +57,7 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ activeTab }: DashboardProps) {
-  const { objectives, dailyHabits, nonNegotiables, xp, initializedAt } =
+  const { objectives, dailyHabits, nonNegotiables, xp, initializedAt, logs } =
     useElite();
   const tab = TAB_CONTENT[activeTab];
   const TabIcon = tab.icon;
@@ -354,6 +363,152 @@ export default function Dashboard({ activeTab }: DashboardProps) {
 
           {/* ═══ HABITS TAB ═══ */}
           {activeTab === "habits" && <HabitsView />}
+
+          {/* ═══ LOGS TAB ═══ */}
+          {activeTab === "logs" && (
+            <div className="space-y-3">
+              {logs.length === 0 ? (
+                <motion.div
+                  initial={{ opacity: 0, scale: 0.98 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="glass p-8 md:p-12 text-center"
+                >
+                  <div className="w-16 h-16 rounded-2xl bg-card-border/30 flex items-center justify-center mb-5 mx-auto">
+                    <BookOpen
+                      size={28}
+                      strokeWidth={1.5}
+                      className="text-muted"
+                    />
+                  </div>
+                  <h3 className="text-base font-semibold text-text mb-2">
+                    No logs yet
+                  </h3>
+                  <p className="text-sm text-muted max-w-xs mx-auto">
+                    A daily performance snapshot will appear here after your
+                    first day reset
+                  </p>
+                </motion.div>
+              ) : (
+                logs.map((log, i) => {
+                  const nnHit = log.nnSummary.filter((n) => n.completed).length;
+                  const nnTotal = log.nnSummary.length;
+                  const habitsHit = log.habitSummary.filter(
+                    (h) => h.completed
+                  ).length;
+                  const habitsTotal = log.habitSummary.length;
+                  const allNNsCleared = nnHit === nnTotal && nnTotal > 0;
+
+                  return (
+                    <motion.div
+                      key={log.date}
+                      initial={{ opacity: 0, y: 12 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ delay: i * 0.05, duration: 0.3 }}
+                      className="glass p-4"
+                    >
+                      {/* Header */}
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-[10px] font-semibold text-violet uppercase tracking-wider">
+                          {new Date(log.date + "T12:00:00").toLocaleDateString(
+                            undefined,
+                            {
+                              weekday: "short",
+                              month: "short",
+                              day: "numeric",
+                            }
+                          )}
+                        </span>
+                        <span className="text-[10px] font-bold text-cyan tabular-nums px-2 py-0.5 rounded-lg bg-cyan/10">
+                          {log.totalXpAtTime.toLocaleString()} XP
+                        </span>
+                      </div>
+
+                      {/* NN Summary */}
+                      {nnTotal > 0 && (
+                        <div className="mb-3">
+                          <p
+                            className={`text-xs font-semibold mb-1.5 ${allNNsCleared ? "text-cyan" : "text-pink"}`}
+                          >
+                            {allNNsCleared
+                              ? `${nnHit}/${nnTotal} NNs CLEARED`
+                              : `${nnHit}/${nnTotal} NNs Hit`}
+                            {log.penalty > 0 && (
+                              <span className="text-pink/60 ml-2">
+                                (-{log.penalty} XP)
+                              </span>
+                            )}
+                          </p>
+                          <div className="space-y-1">
+                            {log.nnSummary.map((nn) => (
+                              <div
+                                key={nn.title}
+                                className="flex items-center gap-2"
+                              >
+                                {nn.completed ? (
+                                  <Check
+                                    size={12}
+                                    strokeWidth={3}
+                                    className="text-cyan shrink-0"
+                                  />
+                                ) : (
+                                  <X
+                                    size={12}
+                                    strokeWidth={3}
+                                    className="text-pink shrink-0"
+                                  />
+                                )}
+                                <span
+                                  className={`text-xs ${nn.completed ? "text-muted" : "text-pink/70"}`}
+                                >
+                                  {nn.title}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Habits Summary */}
+                      {habitsTotal > 0 && (
+                        <div>
+                          <p className="text-xs font-semibold text-violet mb-1.5">
+                            {habitsHit}/{habitsTotal} Habits Done
+                          </p>
+                          <div className="space-y-1">
+                            {log.habitSummary.map((h) => (
+                              <div
+                                key={h.title}
+                                className="flex items-center gap-2"
+                              >
+                                {h.completed ? (
+                                  <Check
+                                    size={12}
+                                    strokeWidth={3}
+                                    className="text-cyan shrink-0"
+                                  />
+                                ) : (
+                                  <X
+                                    size={12}
+                                    strokeWidth={3}
+                                    className="text-dim shrink-0"
+                                  />
+                                )}
+                                <span
+                                  className={`text-xs ${h.completed ? "text-muted" : "text-dim"}`}
+                                >
+                                  {h.title}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </motion.div>
+                  );
+                })
+              )}
+            </div>
+          )}
 
           {/* ═══ GHOST TAB — EMPTY STATE ═══ */}
           {activeTab === "ghost" && (

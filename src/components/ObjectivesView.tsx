@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { motion } from "framer-motion";
-import { Plus, Star, Rocket, ChevronUp } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Plus, Star, Rocket, ChevronUp, Trophy } from "lucide-react";
 import { useElite, type Objective } from "@/context/EliteContext";
 import AddObjectiveModal from "./AddObjectiveModal";
 
@@ -108,22 +108,47 @@ function ObjectiveCard({
   index: number;
   onIncrement: (id: string) => void;
 }) {
+  const [justCompleted, setJustCompleted] = useState(false);
   const isNorthStar = objective.type === "north-star";
   const accent = isNorthStar ? "#8B5CF6" : "#06B6D4";
   const accentClass = isNorthStar ? "text-violet" : "text-cyan";
   const isComplete = objective.status === "Completed";
 
+  const handleIncrement = () => {
+    if (isComplete) return;
+    // Check if this increment will complete the objective
+    if (objective.progress + 10 >= 100) {
+      setJustCompleted(true);
+    }
+    onIncrement(objective.id);
+  };
+
   return (
     <motion.div
       initial={{ opacity: 0, y: 16 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ delay: index * 0.08, duration: 0.35 }}
-      className="glass glass-hover p-5 group"
-      style={
-        isNorthStar
-          ? { boxShadow: `0 0 24px rgba(139, 92, 246, 0.08)` }
-          : undefined
+      animate={{
+        opacity: 1,
+        y: 0,
+        boxShadow: justCompleted
+          ? [
+              `0 0 0px ${accent}00`,
+              `0 0 40px ${accent}66`,
+              `0 0 20px ${accent}33`,
+              `0 0 0px ${accent}00`,
+            ]
+          : isNorthStar
+            ? `0 0 24px rgba(139, 92, 246, 0.08)`
+            : "none",
+      }}
+      transition={
+        justCompleted
+          ? { boxShadow: { duration: 1.2, times: [0, 0.3, 0.7, 1] } }
+          : { delay: index * 0.08, duration: 0.35 }
       }
+      onAnimationComplete={() => {
+        if (justCompleted) setJustCompleted(false);
+      }}
+      className="glass glass-hover p-5 group"
     >
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-2">
@@ -138,13 +163,37 @@ function ObjectiveCard({
             {isNorthStar ? "North Star" : "Sprint"}
           </span>
         </div>
-        <span
-          className={`text-[10px] font-semibold ${
-            isComplete ? "text-cyan" : "text-muted"
-          }`}
-        >
-          {objective.status}
-        </span>
+
+        <AnimatePresence mode="wait">
+          {isComplete ? (
+            <motion.div
+              key="achieved"
+              initial={{ scale: 0, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              transition={{ type: "spring", stiffness: 400, damping: 20 }}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
+              style={{
+                backgroundColor: `${accent}1A`,
+                boxShadow: `0 0 12px ${accent}33`,
+              }}
+            >
+              <Trophy size={12} strokeWidth={2} style={{ color: accent }} />
+              <span
+                className="text-[10px] font-bold uppercase tracking-wider"
+                style={{ color: accent }}
+              >
+                Achieved
+              </span>
+            </motion.div>
+          ) : (
+            <motion.span
+              key="status"
+              className="text-[10px] font-semibold text-muted"
+            >
+              {objective.status}
+            </motion.span>
+          )}
+        </AnimatePresence>
       </div>
 
       <h3 className="text-sm font-bold text-text mb-1.5">{objective.title}</h3>
@@ -175,14 +224,24 @@ function ObjectiveCard({
 
       {!isComplete && (
         <button
-          onClick={() => onIncrement(objective.id)}
-          className="mt-3 flex items-center gap-1.5 text-xs font-medium cursor-pointer
-                     opacity-60 hover:opacity-100 transition-opacity duration-200"
-          style={{ color: accent }}
+          onClick={handleIncrement}
+          className="mt-3 flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold cursor-pointer
+                     transition-all duration-200 active:scale-95"
+          style={{
+            color: accent,
+            backgroundColor: `${accent}15`,
+          }}
         >
           <ChevronUp size={14} strokeWidth={2} />
           +10%
         </button>
+      )}
+
+      {/* Completion XP hint */}
+      {!isComplete && objective.progress >= 70 && (
+        <p className="text-[10px] text-dim mt-2">
+          {isNorthStar ? "+500 XP" : "+200 XP"} on completion
+        </p>
       )}
     </motion.div>
   );
