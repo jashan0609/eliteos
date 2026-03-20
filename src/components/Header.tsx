@@ -3,11 +3,11 @@
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Clock, Zap, Flame } from "lucide-react";
+import { useElite } from "@/context/EliteContext";
 
 export default function Header() {
+  const { xp, streak } = useElite();
   const [time, setTime] = useState("");
-  const streak = 5;
-  const xp = 1240;
 
   useEffect(() => {
     const update = () => {
@@ -22,7 +22,6 @@ export default function Header() {
     return () => clearInterval(interval);
   }, []);
 
-  // Calculate glow intensity based on XP (0-10000 range mapped to 0.2-1.0)
   const glowIntensity = Math.min(0.2 + (xp / 10000) * 0.8, 1.0);
 
   return (
@@ -55,7 +54,6 @@ export default function Header() {
 
       {/* Right: Time + XP */}
       <div className="flex items-center gap-3 md:gap-5">
-        {/* UTC Time */}
         <div className="flex items-center gap-1.5">
           <Clock size={14} strokeWidth={1.5} className="text-dim" />
           <span className="text-xs text-muted tabular-nums font-medium">
@@ -66,7 +64,6 @@ export default function Header() {
 
         <div className="w-px h-4 bg-card-border" />
 
-        {/* XP with glow */}
         <div className="flex items-center gap-1.5">
           <Zap size={14} strokeWidth={1.5} className="text-violet" />
           <span className="text-xs text-muted font-medium hidden sm:inline">

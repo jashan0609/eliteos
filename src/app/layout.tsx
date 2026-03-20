@@ -1,11 +1,18 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
+import { EliteProvider } from "@/context/EliteContext";
 import "./globals.css";
 
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",
 });
+
+export const viewport: Viewport = {
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+};
 
 export const metadata: Metadata = {
   title: "EliteOS — Your Operating System",
@@ -20,7 +27,7 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} h-full`}>
       <body className={`${inter.className} min-h-full flex flex-col antialiased`}>
-        {children}
+        <EliteProvider>{children}</EliteProvider>
       </body>
     </html>
   );

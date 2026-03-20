@@ -21,7 +21,6 @@ export default function TerminalBoot({ onBootComplete }: TerminalBootProps) {
   const [currentStep, setCurrentStep] = useState(0);
 
   const startBoot = useCallback(() => {
-    console.log("System Initialization Triggered");
     setPhase("booting");
   }, []);
 
@@ -66,7 +65,6 @@ export default function TerminalBoot({ onBootComplete }: TerminalBootProps) {
       <div style={{ width: "100%", maxWidth: "28rem", padding: "0 2rem" }}>
         {phase === "idle" && (
           <div style={{ textAlign: "center" }}>
-            {/* Logo */}
             <div style={{ marginBottom: "3rem", pointerEvents: "none" }}>
               <h1
                 style={{
@@ -90,7 +88,6 @@ export default function TerminalBoot({ onBootComplete }: TerminalBootProps) {
               </p>
             </div>
 
-            {/* Launch Button — inline styles only, no Tailwind, no transforms */}
             <button
               type="button"
               onClick={startBoot}
@@ -99,17 +96,15 @@ export default function TerminalBoot({ onBootComplete }: TerminalBootProps) {
                 padding: "1rem 2.5rem",
                 backgroundColor: "#8B5CF6",
                 color: "#fff",
-                fontSize: "0.875rem",
+                fontSize: "1rem",
                 fontWeight: 600,
                 letterSpacing: "0.05em",
                 borderRadius: "1rem",
-                border: "none",
+                border: "2px solid #a78bfa",
                 outline: "none",
                 cursor: "pointer",
-                WebkitTapHighlightColor: "rgba(139, 92, 246, 0.3)",
                 touchAction: "manipulation",
-                userSelect: "none",
-                WebkitUserSelect: "none",
+                pointerEvents: "auto",
                 position: "relative",
                 zIndex: 10000,
               }}

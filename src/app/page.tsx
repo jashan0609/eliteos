@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import TerminalBoot from "@/components/TerminalBoot";
 import Sidebar from "@/components/Sidebar";
@@ -13,13 +13,21 @@ export default function Home() {
   const [booted, setBooted] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
 
+  // Skip boot if already booted this session
+  useEffect(() => {
+    if (sessionStorage.getItem("elite-booted") === "true") {
+      setBooted(true);
+    }
+  }, []);
+
   const handleBootComplete = useCallback(() => {
+    sessionStorage.setItem("elite-booted", "true");
     setBooted(true);
   }, []);
 
   return (
     <main className="h-screen w-screen overflow-hidden bg-bg">
-      <TerminalBoot onBootComplete={handleBootComplete} />
+      {!booted && <TerminalBoot onBootComplete={handleBootComplete} />}
 
       <AnimatePresence>
         {booted && (
@@ -29,7 +37,6 @@ export default function Home() {
             transition={{ duration: 0.5 }}
             className="h-full flex flex-col md:flex-row"
           >
-            {/* Desktop sidebar */}
             <div className="hidden md:flex">
               <Sidebar activeTab={activeTab} onTabChange={setActiveTab} />
             </div>
@@ -39,7 +46,6 @@ export default function Home() {
               <Dashboard activeTab={activeTab} />
             </div>
 
-            {/* Mobile bottom nav */}
             <div className="md:hidden">
               <Sidebar
                 activeTab={activeTab}
