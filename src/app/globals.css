@@ -1,26 +1,110 @@
 @import "tailwindcss";
 
-:root {
-  --background: #ffffff;
-  --foreground: #171717;
-}
-
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-bg: #000000;
+  --color-card: #111111;
+  --color-card-border: #222222;
+  --color-violet: #8B5CF6;
+  --color-cyan: #06B6D4;
+  --color-pink: #F43F5E;
+  --color-text: #F0F0F0;
+  --color-muted: #888888;
+  --color-dim: #444444;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
+* {
+  box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Ensure buttons always receive touches */
+button {
+  touch-action: manipulation;
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: #000000;
+  color: var(--color-text);
+}
+
+/* Glassmorphism card */
+.glass {
+  background: rgba(17, 17, 17, 0.8);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid #222222;
+  border-radius: 16px;
+}
+
+.glass-hover {
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.glass-hover:hover {
+  border-color: #8B5CF6;
+  box-shadow: 0 0 20px rgba(139, 92, 246, 0.08);
+}
+
+/* XP Glow effect — intensity controlled via CSS variable */
+.xp-glow {
+  --glow-intensity: 0.3;
+  text-shadow:
+    0 0 8px rgba(139, 92, 246, var(--glow-intensity)),
+    0 0 20px rgba(139, 92, 246, calc(var(--glow-intensity) * 0.6)),
+    0 0 40px rgba(139, 92, 246, calc(var(--glow-intensity) * 0.3));
+}
+
+@keyframes xp-pulse {
+  0%, 100% { --glow-intensity: 0.3; }
+  50% { --glow-intensity: 0.7; }
+}
+
+.xp-glow-animated {
+  animation: xp-pulse 2s ease-in-out infinite;
+}
+
+/* Streak fire glow */
+.streak-glow {
+  text-shadow: 0 0 8px rgba(251, 146, 60, 0.5), 0 0 16px rgba(251, 146, 60, 0.2);
+}
+
+/* Scrollbar */
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: #000000;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #8B5CF6;
+}
+
+/* Subtle ambient glow on active nav items */
+.nav-active-glow {
+  box-shadow: 0 0 12px rgba(139, 92, 246, 0.15);
+}
+
+/* Fade in — used so boot screen is visible without JS hydration */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Boot progress bar shimmer */
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+.shimmer {
+  background: linear-gradient(90deg, #8B5CF6 25%, #a78bfa 50%, #8B5CF6 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s infinite;
 }
