@@ -1,7 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { Home, Target, Ghost, BookOpen } from "lucide-react";
+import { Home, Target, Ghost, CheckCircle } from "lucide-react";
 import type { TabId } from "@/app/page";
 
 const NAV_ITEMS: {
@@ -13,7 +13,7 @@ const NAV_ITEMS: {
   { id: "dashboard", label: "Dashboard", mobileLabel: "Home", icon: Home },
   { id: "objectives", label: "Objectives", mobileLabel: "Goals", icon: Target },
   { id: "ghost", label: "The Ghost", mobileLabel: "Ghost", icon: Ghost },
-  { id: "logs", label: "Logs", mobileLabel: "Logs", icon: BookOpen },
+  { id: "habits", label: "Habits", mobileLabel: "Habits", icon: CheckCircle },
 ];
 
 interface SidebarProps {
