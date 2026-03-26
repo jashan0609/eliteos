@@ -125,6 +125,11 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     async function fetchSystemState() {
       const userId = user!.id;
 
+      // Debug: verify auth session is attached
+      const { data: sessionData } = await supabase.auth.getSession();
+      console.log("[ELITE_DEBUG] session:", sessionData.session ? "VALID" : "NULL");
+      console.log("[ELITE_DEBUG] user_id:", userId);
+
       // Fetch all tables in parallel
       const [profileRes, objRes, dhRes, nnRes, logsRes] = await Promise.all([
         supabase.from("operator_profile").select("*").eq("id", userId).single(),
@@ -135,6 +140,11 @@ export function EliteProvider({ children }: { children: ReactNode }) {
       ]);
 
       if (cancelled) return;
+
+      // Debug: log any errors
+      console.log("[ELITE_DEBUG] profile:", profileRes.error?.message ?? "OK");
+      console.log("[ELITE_DEBUG] objectives:", objRes.error?.message ?? "OK");
+      console.log("[ELITE_DEBUG] habits:", dhRes.error?.message ?? "OK");
 
       // If no profile yet, create one (first login)
       let profile = profileRes.data;
