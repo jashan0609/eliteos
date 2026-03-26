@@ -3,6 +3,17 @@ import { supabaseAdmin } from "@/lib/supabase-admin";
 
 const PENALTY_PER_NN = 60;
 
+export async function POST(req: Request) {
+  const authHeader = req.headers.get('Authorization');
+
+  // Vercel Cron automatically sends the CRON_SECRET in the Authorization header
+  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  // ... rest of your code using SUPABASE_SERVICE_ROLE_KEY to talk to Supabase
+}
+
 export async function GET(req: Request) {
   // ── Auth: verify the cron secret ──
   const authHeader = req.headers.get("authorization");
