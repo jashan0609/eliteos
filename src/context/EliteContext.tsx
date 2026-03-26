@@ -6,6 +6,7 @@ import {
   useState,
   useEffect,
   useCallback,
+  useRef,
   type ReactNode,
 } from "react";
 import { supabase } from "@/lib/supabase";
@@ -99,6 +100,9 @@ export function EliteProvider({ children }: { children: ReactNode }) {
   const { user } = useAuth();
   const [state, setState] = useState<EliteState>(DEFAULT_STATE);
   const [loading, setLoading] = useState(true);
+
+  // Prevents rapid-fire toggles from creating race conditions
+  const pendingToggles = useRef<Set<string>>(new Set());
 
   // Toast state
   const [toast, setToast] = useState({
@@ -265,26 +269,22 @@ export function EliteProvider({ children }: { children: ReactNode }) {
 
   const toggleDailyHabit = useCallback(
     (id: string) => {
+      // Guard: block rapid-fire clicks while DB call is in flight
+      if (pendingToggles.current.has(id)) return;
+
+      const habit = state.dailyHabits.find((h) => h.id === id);
+      if (!habit) return;
+
+      const completing = !habit.completedToday;
+      const xpDelta = completing ? 15 : -15;
+
+      pendingToggles.current.add(id);
+
+      // Optimistic update
       setState((prev) => {
-        const habit = prev.dailyHabits.find((h) => h.id === id);
-        if (!habit) return prev;
-
-        const completing = !habit.completedToday;
-        const xpDelta = completing ? 15 : -15;
+        const h = prev.dailyHabits.find((h) => h.id === id);
+        if (!h) return prev;
         const newXp = Math.max(0, prev.xp + xpDelta);
-
-        // Async DB updates
-        if (user) {
-          supabase
-            .from("daily_habits")
-            .update({ completed_today: completing })
-            .eq("id", id);
-          patchProfile(user.id, {
-            xp: newXp,
-            ...(completing ? { last_check_in: new Date().toISOString() } : {}),
-          });
-        }
-
         return {
           ...prev,
           xp: newXp,
@@ -295,16 +295,34 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         };
       });
 
-      const habit = state.dailyHabits.find((h) => h.id === id);
-      if (habit) {
-        if (!habit.completedToday) {
-          showToast("gain", 15, "+15 XP");
-        } else {
-          showToast("loss", 15, "-15 XP");
-        }
+      showToast(completing ? "gain" : "loss", 15, completing ? "+15 XP" : "-15 XP");
+
+      // Persist to DB — rollback on failure
+      if (user) {
+        Promise.all([
+          supabase.from("daily_habits").update({ completed_today: completing }).eq("id", id),
+          supabase.from("operator_profile").update({
+            xp: Math.max(0, state.xp + xpDelta),
+            ...(completing ? { last_check_in: new Date().toISOString() } : {}),
+          }).eq("id", user.id),
+        ]).then(([habitRes, profileRes]) => {
+          pendingToggles.current.delete(id);
+          if (habitRes.error || profileRes.error) {
+            setState((prev) => ({
+              ...prev,
+              xp: Math.max(0, prev.xp - xpDelta),
+              dailyHabits: prev.dailyHabits.map((h) =>
+                h.id === id ? { ...h, completedToday: !completing } : h
+              ),
+            }));
+            showToast("loss", 0, "SYNC_FAILED — reverted");
+          }
+        });
+      } else {
+        pendingToggles.current.delete(id);
       }
     },
-    [showToast, state.dailyHabits, user]
+    [showToast, state.dailyHabits, state.xp, user]
   );
 
   // ── Non-Negotiables ──
@@ -343,25 +361,21 @@ export function EliteProvider({ children }: { children: ReactNode }) {
 
   const toggleNonNegotiable = useCallback(
     (id: string) => {
+      if (pendingToggles.current.has(id)) return;
+
+      const habit = state.nonNegotiables.find((h) => h.id === id);
+      if (!habit) return;
+
+      const completing = !habit.completedToday;
+      const xpDelta = completing ? 30 : -30;
+
+      pendingToggles.current.add(id);
+
+      // Optimistic update
       setState((prev) => {
-        const habit = prev.nonNegotiables.find((h) => h.id === id);
-        if (!habit) return prev;
-
-        const completing = !habit.completedToday;
-        const xpDelta = completing ? 30 : -30;
+        const h = prev.nonNegotiables.find((h) => h.id === id);
+        if (!h) return prev;
         const newXp = Math.max(0, prev.xp + xpDelta);
-
-        if (user) {
-          supabase
-            .from("non_negotiables")
-            .update({ completed_today: completing })
-            .eq("id", id);
-          patchProfile(user.id, {
-            xp: newXp,
-            ...(completing ? { last_check_in: new Date().toISOString() } : {}),
-          });
-        }
-
         return {
           ...prev,
           xp: newXp,
@@ -372,16 +386,34 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         };
       });
 
-      const habit = state.nonNegotiables.find((h) => h.id === id);
-      if (habit) {
-        if (!habit.completedToday) {
-          showToast("gain", 30, "+30 XP");
-        } else {
-          showToast("loss", 30, "-30 XP");
-        }
+      showToast(completing ? "gain" : "loss", 30, completing ? "+30 XP" : "-30 XP");
+
+      // Persist to DB — rollback on failure
+      if (user) {
+        Promise.all([
+          supabase.from("non_negotiables").update({ completed_today: completing }).eq("id", id),
+          supabase.from("operator_profile").update({
+            xp: Math.max(0, state.xp + xpDelta),
+            ...(completing ? { last_check_in: new Date().toISOString() } : {}),
+          }).eq("id", user.id),
+        ]).then(([habitRes, profileRes]) => {
+          pendingToggles.current.delete(id);
+          if (habitRes.error || profileRes.error) {
+            setState((prev) => ({
+              ...prev,
+              xp: Math.max(0, prev.xp - xpDelta),
+              nonNegotiables: prev.nonNegotiables.map((h) =>
+                h.id === id ? { ...h, completedToday: !completing } : h
+              ),
+            }));
+            showToast("loss", 0, "SYNC_FAILED — reverted");
+          }
+        });
+      } else {
+        pendingToggles.current.delete(id);
       }
     },
-    [showToast, state.nonNegotiables, user]
+    [showToast, state.nonNegotiables, state.xp, user]
   );
 
   // ── Objectives ──
