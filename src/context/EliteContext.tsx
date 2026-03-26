@@ -8,6 +8,8 @@ import {
   useCallback,
   type ReactNode,
 } from "react";
+import { supabase } from "@/lib/supabase";
+import { useAuth } from "@/context/AuthContext";
 import XPToast from "@/components/XPToast";
 
 // ── Types ──
@@ -49,6 +51,7 @@ interface EliteState {
 }
 
 interface EliteContextValue extends EliteState {
+  loading: boolean;
   updateXP: (amount: number) => void;
   addObjective: (obj: Omit<Objective, "id" | "progress" | "status">) => void;
   incrementObjectiveProgress: (id: string) => void;
@@ -59,50 +62,17 @@ interface EliteContextValue extends EliteState {
   showToast: (type: "gain" | "loss", amount: number, message: string) => void;
 }
 
-const SEED_OBJECTIVES: Objective[] = [
-  {
-    id: "1",
-    type: "north-star",
-    title: "Master Full-Stack Engineering",
-    description:
-      "Achieve deep proficiency across frontend, backend, databases, and infrastructure. Build and ship 3 production-grade applications.",
-    progress: 35,
-    status: "Active",
-  },
-  {
-    id: "2",
-    type: "sprint",
-    title: "Complete EliteOS V1 Prototype",
-    description:
-      "Finish all core modules — Dashboard, Objectives, Ghost Tracker, and Habits — with full mobile responsiveness.",
-    progress: 60,
-    status: "Active",
-  },
-];
-
 const DEFAULT_STATE: EliteState = {
   xp: 0,
   streak: 0,
   lastCheckIn: null,
   lastHabitReset: null,
   initializedAt: new Date().toISOString(),
-  objectives: SEED_OBJECTIVES,
+  objectives: [],
   dailyHabits: [],
   nonNegotiables: [],
   logs: [],
 };
-
-const STORAGE_KEY = "elite-state";
-
-function getToday(): string {
-  return new Date().toISOString().slice(0, 10);
-}
-
-function getYesterday(): string {
-  const d = new Date();
-  d.setDate(d.getDate() - 1);
-  return d.toISOString().slice(0, 10);
-}
 
 // ── Context ──
 
@@ -114,11 +84,21 @@ export function useElite(): EliteContextValue {
   return ctx;
 }
 
+// ── Helper: update profile column(s) ──
+
+async function patchProfile(
+  userId: string,
+  fields: Record<string, unknown>
+) {
+  await supabase.from("operator_profile").update(fields).eq("id", userId);
+}
+
 // ── Provider ──
 
 export function EliteProvider({ children }: { children: ReactNode }) {
+  const { user } = useAuth();
   const [state, setState] = useState<EliteState>(DEFAULT_STATE);
-  const [hydrated, setHydrated] = useState(false);
+  const [loading, setLoading] = useState(true);
 
   // Toast state
   const [toast, setToast] = useState({
@@ -128,115 +108,99 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     message: "",
   });
 
-  // Load from localStorage on mount + daily reset / penalty
+  // ── Fetch all data from Supabase on login ──
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (raw) {
-        let saved = JSON.parse(raw) as EliteState;
-
-        // Migration: if old single `habits` array exists, discard it
-        const legacy = saved as EliteState & { habits?: unknown };
-        if (legacy.habits) {
-          const { habits: _, ...rest } = legacy;
-          saved = { ...rest, dailyHabits: [], nonNegotiables: [] } as EliteState;
-        }
-        if (!saved.dailyHabits) saved.dailyHabits = [];
-        if (!saved.nonNegotiables) saved.nonNegotiables = [];
-
-        const today = getToday();
-        const yesterday = getYesterday();
-
-        // Ensure logs array exists (migration)
-        if (!saved.logs) saved.logs = [];
-
-        // Detect new day — archive snapshot, then reset & penalize
-        const hasItems =
-          saved.dailyHabits.length > 0 || saved.nonNegotiables.length > 0;
-        if (saved.lastHabitReset !== today && hasItems) {
-          // ── Archive yesterday's performance BEFORE resetting ──
-          let penalty = 0;
-
-          const nnSummary = saved.nonNegotiables.map((h) => {
-            if (!h.completedToday) penalty += 60;
-            return { title: h.title, completed: h.completedToday };
-          });
-
-          const habitSummary = saved.dailyHabits.map((h) => ({
-            title: h.title,
-            completed: h.completedToday,
-          }));
-
-          const logDate = saved.lastHabitReset || yesterday;
-          const snapshot: DailyPerformanceLog = {
-            date: logDate,
-            nnSummary,
-            habitSummary,
-            totalXpAtTime: saved.xp,
-            penalty,
-          };
-
-          // ── Now reset for the new day ──
-          const updatedNNs = saved.nonNegotiables.map((h) => {
-            const newStreak = h.completedToday ? h.streak + 1 : 0;
-            return { ...h, completedToday: false, streak: newStreak };
-          });
-
-          const updatedDaily = saved.dailyHabits.map((h) => {
-            const newStreak = h.completedToday ? h.streak + 1 : 0;
-            return { ...h, completedToday: false, streak: newStreak };
-          });
-
-          // Global streak
-          const lastDay = saved.lastCheckIn
-            ? saved.lastCheckIn.slice(0, 10)
-            : null;
-          let newStreak = saved.streak;
-          if (lastDay === yesterday) {
-            newStreak = saved.streak + 1;
-          } else if (lastDay !== today) {
-            newStreak = lastDay ? 0 : saved.streak;
-          }
-
-          saved = {
-            ...saved,
-            logs: [snapshot, ...saved.logs],
-            nonNegotiables: updatedNNs,
-            dailyHabits: updatedDaily,
-            xp: Math.max(0, saved.xp - penalty),
-            streak: newStreak,
-            lastHabitReset: today,
-          };
-
-          if (penalty > 0) {
-            setTimeout(() => {
-              setToast({
-                show: true,
-                type: "loss",
-                amount: penalty,
-                message: "NON-NEGOTIABLE PENALTY",
-              });
-              setTimeout(
-                () => setToast((t) => ({ ...t, show: false })),
-                3000
-              );
-            }, 500);
-          }
-        }
-
-        setState((prev) => ({ ...prev, ...saved }));
-      }
-    } catch {
-      // ignore corrupt data
+    if (!user) {
+      setState(DEFAULT_STATE);
+      setLoading(false);
+      return;
     }
-    setHydrated(true);
-  }, []);
 
-  // Save to localStorage on every state change (after hydration)
-  useEffect(() => {
-    if (!hydrated) return;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-  }, [state, hydrated]);
+    let cancelled = false;
+
+    async function fetchSystemState() {
+      const userId = user!.id;
+
+      // Fetch all tables in parallel
+      const [profileRes, objRes, dhRes, nnRes, logsRes] = await Promise.all([
+        supabase.from("operator_profile").select("*").eq("id", userId).single(),
+        supabase.from("objectives").select("*").eq("user_id", userId).order("created_at", { ascending: true }),
+        supabase.from("daily_habits").select("*").eq("user_id", userId).order("created_at", { ascending: true }),
+        supabase.from("non_negotiables").select("*").eq("user_id", userId).order("created_at", { ascending: true }),
+        supabase.from("daily_logs").select("*").eq("user_id", userId).order("created_at", { ascending: false }),
+      ]);
+
+      if (cancelled) return;
+
+      // If no profile yet, create one (first login)
+      let profile = profileRes.data;
+      if (!profile) {
+        const { data: newProfile } = await supabase
+          .from("operator_profile")
+          .insert({ id: userId })
+          .select()
+          .single();
+        profile = newProfile;
+      }
+
+      if (!profile || cancelled) return;
+
+      // Map DB rows to local types
+      const objectives: Objective[] = (objRes.data ?? []).map((r) => ({
+        id: r.id,
+        type: r.type as "north-star" | "sprint",
+        title: r.title,
+        description: r.description,
+        progress: r.progress,
+        status: r.status as "Active" | "Completed",
+      }));
+
+      const dailyHabits: Habit[] = (dhRes.data ?? []).map((r) => ({
+        id: r.id,
+        title: r.title,
+        completedToday: r.completed_today,
+        streak: r.streak,
+      }));
+
+      const nonNegotiables: Habit[] = (nnRes.data ?? []).map((r) => ({
+        id: r.id,
+        title: r.title,
+        completedToday: r.completed_today,
+        streak: r.streak,
+      }));
+
+      const logs: DailyPerformanceLog[] = (logsRes.data ?? []).map((r) => ({
+        date: r.date,
+        nnSummary: r.nn_summary as { title: string; completed: boolean }[],
+        habitSummary: r.habit_summary as { title: string; completed: boolean }[],
+        totalXpAtTime: r.total_xp_at_time,
+        penalty: r.penalty,
+      }));
+
+      const loadedState: EliteState = {
+        xp: profile.xp,
+        streak: profile.streak,
+        lastCheckIn: profile.last_check_in,
+        lastHabitReset: profile.last_habit_reset,
+        initializedAt: profile.initialized_at,
+        objectives,
+        dailyHabits,
+        nonNegotiables,
+        logs,
+      };
+
+      // Daily reset is handled server-side by the daily-reset Edge Function.
+      // The context simply trusts the database state.
+
+      if (!cancelled) {
+        setState(loadedState);
+        setLoading(false);
+      }
+    }
+
+    fetchSystemState();
+    return () => { cancelled = true; };
+  }, [user]);
 
   const showToast = useCallback(
     (type: "gain" | "loss", amount: number, message: string) => {
@@ -246,29 +210,58 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     []
   );
 
+  // ── XP ──
+
   const updateXP = useCallback(
     (amount: number) => {
-      setState((prev) => ({ ...prev, xp: Math.max(0, prev.xp + amount) }));
+      setState((prev) => {
+        const newXp = Math.max(0, prev.xp + amount);
+        if (user) patchProfile(user.id, { xp: newXp });
+        return { ...prev, xp: newXp };
+      });
       if (amount > 0) {
         showToast("gain", amount, `+${amount} XP`);
       } else if (amount < 0) {
         showToast("loss", Math.abs(amount), `${amount} XP`);
       }
     },
-    [showToast]
+    [showToast, user]
   );
 
   // ── Daily Habits ──
 
-  const addDailyHabit = useCallback((title: string) => {
-    setState((prev) => ({
-      ...prev,
-      dailyHabits: [
-        ...prev.dailyHabits,
-        { id: Date.now().toString(), title, completedToday: false, streak: 0 },
-      ],
-    }));
-  }, []);
+  const addDailyHabit = useCallback(
+    (title: string) => {
+      if (!user) return;
+      const tempId = Date.now().toString();
+
+      setState((prev) => ({
+        ...prev,
+        dailyHabits: [
+          ...prev.dailyHabits,
+          { id: tempId, title, completedToday: false, streak: 0 },
+        ],
+      }));
+
+      // Insert to Supabase and update local ID
+      supabase
+        .from("daily_habits")
+        .insert({ user_id: user.id, title })
+        .select()
+        .single()
+        .then(({ data }) => {
+          if (data) {
+            setState((prev) => ({
+              ...prev,
+              dailyHabits: prev.dailyHabits.map((h) =>
+                h.id === tempId ? { ...h, id: data.id } : h
+              ),
+            }));
+          }
+        });
+    },
+    [user]
+  );
 
   const toggleDailyHabit = useCallback(
     (id: string) => {
@@ -278,15 +271,26 @@ export function EliteProvider({ children }: { children: ReactNode }) {
 
         const completing = !habit.completedToday;
         const xpDelta = completing ? 15 : -15;
+        const newXp = Math.max(0, prev.xp + xpDelta);
+
+        // Async DB updates
+        if (user) {
+          supabase
+            .from("daily_habits")
+            .update({ completed_today: completing })
+            .eq("id", id);
+          patchProfile(user.id, {
+            xp: newXp,
+            ...(completing ? { last_check_in: new Date().toISOString() } : {}),
+          });
+        }
 
         return {
           ...prev,
-          xp: Math.max(0, prev.xp + xpDelta),
-          lastCheckIn: completing
-            ? new Date().toISOString()
-            : prev.lastCheckIn,
+          xp: newXp,
+          lastCheckIn: completing ? new Date().toISOString() : prev.lastCheckIn,
           dailyHabits: prev.dailyHabits.map((h) =>
-            h.id === id ? { ...h, completedToday: !h.completedToday } : h
+            h.id === id ? { ...h, completedToday: completing } : h
           ),
         };
       });
@@ -300,20 +304,42 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [showToast, state.dailyHabits]
+    [showToast, state.dailyHabits, user]
   );
 
   // ── Non-Negotiables ──
 
-  const addNonNegotiable = useCallback((title: string) => {
-    setState((prev) => ({
-      ...prev,
-      nonNegotiables: [
-        ...prev.nonNegotiables,
-        { id: Date.now().toString(), title, completedToday: false, streak: 0 },
-      ],
-    }));
-  }, []);
+  const addNonNegotiable = useCallback(
+    (title: string) => {
+      if (!user) return;
+      const tempId = Date.now().toString();
+
+      setState((prev) => ({
+        ...prev,
+        nonNegotiables: [
+          ...prev.nonNegotiables,
+          { id: tempId, title, completedToday: false, streak: 0 },
+        ],
+      }));
+
+      supabase
+        .from("non_negotiables")
+        .insert({ user_id: user.id, title })
+        .select()
+        .single()
+        .then(({ data }) => {
+          if (data) {
+            setState((prev) => ({
+              ...prev,
+              nonNegotiables: prev.nonNegotiables.map((h) =>
+                h.id === tempId ? { ...h, id: data.id } : h
+              ),
+            }));
+          }
+        });
+    },
+    [user]
+  );
 
   const toggleNonNegotiable = useCallback(
     (id: string) => {
@@ -323,15 +349,25 @@ export function EliteProvider({ children }: { children: ReactNode }) {
 
         const completing = !habit.completedToday;
         const xpDelta = completing ? 30 : -30;
+        const newXp = Math.max(0, prev.xp + xpDelta);
+
+        if (user) {
+          supabase
+            .from("non_negotiables")
+            .update({ completed_today: completing })
+            .eq("id", id);
+          patchProfile(user.id, {
+            xp: newXp,
+            ...(completing ? { last_check_in: new Date().toISOString() } : {}),
+          });
+        }
 
         return {
           ...prev,
-          xp: Math.max(0, prev.xp + xpDelta),
-          lastCheckIn: completing
-            ? new Date().toISOString()
-            : prev.lastCheckIn,
+          xp: newXp,
+          lastCheckIn: completing ? new Date().toISOString() : prev.lastCheckIn,
           nonNegotiables: prev.nonNegotiables.map((h) =>
-            h.id === id ? { ...h, completedToday: !h.completedToday } : h
+            h.id === id ? { ...h, completedToday: completing } : h
           ),
         };
       });
@@ -345,27 +381,41 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [showToast, state.nonNegotiables]
+    [showToast, state.nonNegotiables, user]
   );
 
   // ── Objectives ──
 
   const addObjective = useCallback(
     (obj: Omit<Objective, "id" | "progress" | "status">) => {
+      if (!user) return;
+      const tempId = Date.now().toString();
+
       setState((prev) => ({
         ...prev,
         objectives: [
           ...prev.objectives,
-          {
-            ...obj,
-            id: Date.now().toString(),
-            progress: 0,
-            status: "Active",
-          },
+          { ...obj, id: tempId, progress: 0, status: "Active" as const },
         ],
       }));
+
+      supabase
+        .from("objectives")
+        .insert({ user_id: user.id, type: obj.type, title: obj.title, description: obj.description })
+        .select()
+        .single()
+        .then(({ data }) => {
+          if (data) {
+            setState((prev) => ({
+              ...prev,
+              objectives: prev.objectives.map((o) =>
+                o.id === tempId ? { ...o, id: data.id } : o
+              ),
+            }));
+          }
+        });
     },
-    []
+    [user]
   );
 
   const incrementObjectiveProgress = useCallback(
@@ -381,23 +431,38 @@ export function EliteProvider({ children }: { children: ReactNode }) {
             ? 500
             : 200
           : 0;
+        const newXp = prev.xp + xpReward;
+
+        // Async DB update
+        if (user) {
+          supabase
+            .from("objectives")
+            .update({
+              progress: next,
+              ...(justCompleted ? { status: "Completed" } : {}),
+            })
+            .eq("id", id);
+          if (xpReward > 0) {
+            patchProfile(user.id, { xp: newXp });
+          }
+        }
 
         return {
           ...prev,
-          xp: prev.xp + xpReward,
+          xp: newXp,
           objectives: prev.objectives.map((o) =>
             o.id === id
               ? {
                   ...o,
                   progress: next,
-                  status: justCompleted ? "Completed" : o.status,
+                  status: justCompleted ? ("Completed" as const) : o.status,
                 }
               : o
           ),
         };
       });
 
-      // Toast outside setState to avoid stale closure issues
+      // Toast
       const obj = state.objectives.find((o) => o.id === id);
       if (obj && obj.status === "Active") {
         const next = Math.min(obj.progress + 10, 100);
@@ -411,11 +476,12 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         }
       }
     },
-    [showToast, state.objectives]
+    [showToast, state.objectives, user]
   );
 
   const value: EliteContextValue = {
     ...state,
+    loading,
     updateXP,
     addObjective,
     incrementObjectiveProgress,

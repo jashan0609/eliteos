@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from "next";
 import { Inter } from "next/font/google";
+import { AuthProvider } from "@/context/AuthContext";
 import { EliteProvider } from "@/context/EliteContext";
 import "./globals.css";
 
@@ -27,7 +28,9 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${inter.variable} h-full`}>
       <body className={`${inter.className} min-h-full flex flex-col antialiased`}>
-        <EliteProvider>{children}</EliteProvider>
+        <AuthProvider>
+          <EliteProvider>{children}</EliteProvider>
+        </AuthProvider>
       </body>
     </html>
   );
