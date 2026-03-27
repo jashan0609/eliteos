@@ -125,7 +125,8 @@ export function useElite(): EliteContextValue {
 
 // ── Haptic feedback (mobile only) ──
 
-function haptic(pattern: number | number[] = 8) {
+function haptic(pattern: number | number[] = 30) {
+  // navigator.vibrate is Android Chrome only — iOS Safari does not support it
   if (typeof window !== "undefined" && "vibrate" in navigator) {
     navigator.vibrate(pattern);
   }
@@ -421,7 +422,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         };
       });
 
-      if (completing) haptic([6, 30, 6]);
+      if (completing) haptic([40, 30, 40]);
       showToast(completing ? "gain" : "loss", 15, completing ? "+15 XP" : "-15 XP");
 
       // Persist to DB — rollback on failure
@@ -513,7 +514,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         };
       });
 
-      if (completing) haptic([10, 40, 10]);
+      if (completing) haptic([60, 40, 60]);
       showToast(completing ? "gain" : "loss", 30, completing ? "+30 XP" : "-30 XP");
 
       // Persist to DB — rollback on failure

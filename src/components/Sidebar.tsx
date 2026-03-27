@@ -30,7 +30,8 @@ export default function Sidebar({
 }: SidebarProps) {
   if (mobile) {
     return (
-      <nav className="fixed bottom-0 left-0 right-0 z-40 glass border-t border-card-border flex items-stretch h-16 pb-[env(safe-area-inset-bottom)]">
+      <nav className="fixed bottom-0 left-0 right-0 z-40 glass border-t border-card-border pb-[env(safe-area-inset-bottom,0px)]">
+        <div className="flex items-stretch h-16">
         {NAV_ITEMS.map((item) => {
           const Icon = item.icon;
           const isActive = activeTab === item.id;
@@ -66,6 +67,7 @@ export default function Sidebar({
             </button>
           );
         })}
+        </div>
       </nav>
     );
   }

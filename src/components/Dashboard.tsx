@@ -127,7 +127,7 @@ export default function Dashboard({ activeTab }: DashboardProps) {
   const xpToday = completedDaily * 15 + completedNNs * 30;
 
   return (
-    <div className="flex-1 p-4 md:p-6 overflow-auto pb-24 md:pb-6">
+    <div className="flex-1 p-4 md:p-6 overflow-auto pb-[calc(6rem+env(safe-area-inset-bottom,0px))] md:pb-6">
       <AnimatePresence mode="wait">
         <motion.div
           key={activeTab}
