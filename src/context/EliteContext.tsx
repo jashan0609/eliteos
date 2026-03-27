@@ -51,8 +51,39 @@ interface EliteState {
   logs: DailyPerformanceLog[];
 }
 
+// ── Leveling System ──
+
+export interface LevelData {
+  currentLevel: number;
+  rankName: string;
+  levelProgress: number;
+  xpForCurrentLevel: number;
+  xpForNextLevel: number;
+}
+
+export function getLevelData(xp: number): LevelData {
+  const currentLevel = Math.floor(Math.sqrt(xp / 50)) + 1;
+  const xpForCurrentLevel = (currentLevel - 1) ** 2 * 50;
+  const xpForNextLevel = currentLevel ** 2 * 50;
+  const levelProgress =
+    xpForNextLevel > xpForCurrentLevel
+      ? ((xp - xpForCurrentLevel) / (xpForNextLevel - xpForCurrentLevel)) * 100
+      : 0;
+
+  let rankName: string;
+  if (xp >= 50_000) rankName = "ELITE";
+  else if (xp >= 30_000) rankName = "MASTER";
+  else if (xp >= 15_000) rankName = "CHAMPION";
+  else if (xp >= 5_000) rankName = "DISCIPLINED";
+  else if (xp >= 1_000) rankName = "AMATEUR";
+  else rankName = "BEGINNER";
+
+  return { currentLevel, rankName, levelProgress, xpForCurrentLevel, xpForNextLevel };
+}
+
 interface EliteContextValue extends EliteState {
   loading: boolean;
+  levelData: LevelData;
   updateXP: (amount: number) => void;
   addObjective: (obj: Omit<Objective, "id" | "progress" | "status">) => void;
   incrementObjectiveProgress: (id: string) => void;
@@ -554,9 +585,12 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     [showToast, state.objectives, user]
   );
 
+  const levelData = getLevelData(state.xp);
+
   const value: EliteContextValue = {
     ...state,
     loading,
+    levelData,
     updateXP,
     addObjective,
     incrementObjectiveProgress,

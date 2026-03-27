@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Zap,
@@ -8,7 +9,39 @@ import {
   CheckCircle,
   ShieldAlert,
   BookOpen,
+  Skull,
 } from "lucide-react";
+import {
+  ResponsiveContainer,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  Tooltip,
+  CartesianGrid,
+} from "recharts";
+
+function AuraTooltip({ active, payload, label }: { active?: boolean; payload?: { value: number }[]; label?: string }) {
+  if (!active || !payload?.length) return null;
+  return (
+    <div
+      style={{
+        backgroundColor: "#0a0a0a",
+        border: "1px solid rgba(139,92,246,0.4)",
+        borderRadius: "0.5rem",
+        padding: "8px 12px",
+        fontFamily: "monospace",
+      }}
+    >
+      <p style={{ color: "#888", fontSize: "10px", marginBottom: "4px", letterSpacing: "0.1em" }}>
+        {label}
+      </p>
+      <p style={{ color: "#8b5cf6", fontSize: "13px", fontWeight: 700 }}>
+        {(payload[0].value ?? 0).toLocaleString()} XP
+      </p>
+    </div>
+  );
+}
 import type { TabId } from "@/app/page";
 import { useElite } from "@/context/EliteContext";
 import ObjectivesView from "./ObjectivesView";
@@ -56,9 +89,27 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ activeTab }: DashboardProps) {
-  const { objectives, dailyHabits, nonNegotiables, xp } = useElite();
+  const { objectives, dailyHabits, nonNegotiables, xp, logs } = useElite();
   const tab = TAB_CONTENT[activeTab];
   const TabIcon = tab.icon;
+
+  // Chart data: last 7 days of XP from logs
+  const chartData = useMemo(() => {
+    const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+    const sorted = [...logs]
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .slice(-7);
+    return sorted.map((log) => {
+      const d = new Date(log.date + "T00:00:00");
+      return { day: dayNames[d.getDay()], xp: log.totalXpAtTime };
+    });
+  }, [logs]);
+
+  // Total wasted XP from penalties across all logs
+  const totalWasted = useMemo(
+    () => logs.reduce((sum, log) => sum + log.penalty, 0),
+    [logs]
+  );
 
   // Derive stats
   const completedObjectives = objectives.filter(
@@ -103,13 +154,69 @@ export default function Dashboard({ activeTab }: DashboardProps) {
           {/* ═══ DASHBOARD TAB ═══ */}
           {activeTab === "dashboard" && (
             <>
+              {/* System Telemetry Chart — top of dashboard */}
+              <motion.div
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.06, duration: 0.35 }}
+                className="glass p-4 md:p-5 mb-6"
+              >
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-xs font-semibold text-muted uppercase tracking-wider">
+                    System Telemetry
+                  </h3>
+                  <span className="text-[10px] text-dim font-mono">XP_TREND · 7D</span>
+                </div>
+                {chartData.length > 0 ? (
+                  <div className="w-full h-44">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={chartData} margin={{ top: 4, right: 4, left: -20, bottom: 0 }}>
+                        <CartesianGrid
+                          strokeDasharray="2 4"
+                          stroke="rgba(255,255,255,0.04)"
+                          vertical={false}
+                        />
+                        <XAxis
+                          dataKey="day"
+                          tick={{ fill: "#555", fontSize: 10, fontFamily: "monospace" }}
+                          axisLine={false}
+                          tickLine={false}
+                        />
+                        <YAxis
+                          tick={{ fill: "#555", fontSize: 10, fontFamily: "monospace" }}
+                          axisLine={false}
+                          tickLine={false}
+                          width={38}
+                        />
+                        <Tooltip content={<AuraTooltip />} />
+                        <Line
+                          type="monotone"
+                          dataKey="xp"
+                          stroke="#8b5cf6"
+                          strokeWidth={2}
+                          dot={{ fill: "#8b5cf6", r: 3, strokeWidth: 0 }}
+                          activeDot={{ r: 5, fill: "#8b5cf6", strokeWidth: 2, stroke: "rgba(139,92,246,0.3)" }}
+                          style={{ filter: "drop-shadow(0 0 4px rgba(139,92,246,0.7)) drop-shadow(0 0 10px rgba(139,92,246,0.3))" }}
+                        />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                ) : (
+                  <div className="h-44 flex items-center justify-center border border-dashed border-card-border rounded-xl">
+                    <p className="text-[11px] text-dim font-mono tracking-wider">
+                      INSUFFICIENT_DATA_FOR_TELEMETRY
+                    </p>
+                  </div>
+                )}
+              </motion.div>
+
               {/* Activity Cards */}
               <div className="mb-6">
                 <p className="text-[10px] text-muted font-semibold uppercase tracking-wider mb-3">
                   Activity
                 </p>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                  {/* Sprint Progress */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                  {/* Goal Progress */}
                   <motion.div
                     initial={{ opacity: 0, y: 16 }}
                     animate={{ opacity: 1, y: 0 }}
@@ -230,6 +337,35 @@ export default function Dashboard({ activeTab }: DashboardProps) {
                       {totalDaily === 0
                         ? "No daily habits tracked yet"
                         : `${totalDaily - completedDaily} remaining`}
+                    </p>
+                  </motion.div>
+                  {/* Wasted Potential */}
+                  <motion.div
+                    initial={{ opacity: 0, y: 16 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.26, duration: 0.35 }}
+                    className="glass glass-hover p-4 md:p-5 border border-pink/10"
+                  >
+                    <div className="flex items-start justify-between mb-3">
+                      <div className="p-2 rounded-xl bg-pink/10">
+                        <Skull
+                          size={18}
+                          strokeWidth={1.5}
+                          className="text-pink"
+                        />
+                      </div>
+                      <span className="text-[11px] font-semibold text-pink">
+                        {totalWasted > 0 ? "Losses" : "Clean"}
+                      </span>
+                    </div>
+                    <h3 className="text-sm font-semibold text-text mb-1">
+                      Wasted Potential
+                    </h3>
+                    <p className="text-xl font-bold text-pink tabular-nums font-mono">
+                      {totalWasted > 0 ? `-${totalWasted.toLocaleString()} XP` : "0 XP"}
+                    </p>
+                    <p className="text-[9px] text-dim mt-2 font-mono tracking-wider">
+                      STATUS: AUTHORITATIVE_LOSS_SYNCED
                     </p>
                   </motion.div>
                 </div>

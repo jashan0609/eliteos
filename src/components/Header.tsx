@@ -2,12 +2,12 @@
 
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Clock, Zap, Flame, LogOut } from "lucide-react";
+import { Clock, Flame, LogOut } from "lucide-react";
 import { useElite } from "@/context/EliteContext";
 import { useAuth } from "@/context/AuthContext";
 
 export default function Header() {
-  const { xp, streak } = useElite();
+  const { xp, streak, levelData } = useElite();
   const { signOut } = useAuth();
   const [time, setTime] = useState("");
   const [tz, setTz] = useState("");
@@ -20,75 +20,94 @@ export default function Header() {
       const s = String(now.getSeconds()).padStart(2, "0");
       setTime(`${h}:${m}:${s}`);
     };
-    // Get short timezone name (e.g. "IST", "GMT", "EST")
-    const tzName = Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
-      .formatToParts(new Date())
-      .find((p) => p.type === "timeZoneName")?.value ?? "";
+    const tzName =
+      Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
+        .formatToParts(new Date())
+        .find((p) => p.type === "timeZoneName")?.value ?? "";
     setTz(tzName);
     update();
     const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
   }, []);
 
-  const glowIntensity = Math.min(0.2 + (xp / 10000) * 0.8, 1.0);
-
   return (
     <motion.header
-      initial={{ y: -56 }}
+      initial={{ y: -48 }}
       animate={{ y: 0 }}
       transition={{ duration: 0.3, ease: "easeOut" }}
-      className="h-14 bg-bg border-b border-card-border flex items-center justify-between px-4 md:px-6 shrink-0"
+      className="h-12 bg-bg border-b border-card-border flex items-center justify-between px-3 md:px-6 shrink-0 relative"
     >
-      {/* Left: Daily Streak */}
+      {/* Left: Rank + Streak */}
       <div className="flex items-center gap-2">
-        <Flame
-          size={16}
-          strokeWidth={1.5}
-          className="text-orange-400 streak-glow"
-        />
-        <span className="text-xs font-bold text-orange-400 streak-glow">
-          {streak} DAY STREAK
-        </span>
+        {/* Rank badge */}
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          transition={{ delay: 0.15, duration: 0.3 }}
+          className="px-2 py-0.5 rounded-md bg-violet/10 border border-violet/20 flex items-center gap-1.5"
+        >
+          <span className="text-[9px] text-dim uppercase tracking-widest">RANK</span>
+          <span className="text-[10px] font-bold text-violet tracking-wider">
+            {levelData.currentLevel}
+          </span>
+          <span className="text-[10px] text-dim">/</span>
+          <span className="text-[10px] font-semibold text-violet/80 tracking-wider hidden sm:inline">
+            {levelData.rankName}
+          </span>
+          <span className="text-[10px] font-semibold text-violet/80 tracking-wider sm:hidden">
+            {levelData.rankName.slice(0, 3)}
+          </span>
+        </motion.div>
+
+        {/* Streak */}
+        <div className="flex items-center gap-1">
+          <Flame size={12} strokeWidth={1.5} className="text-orange-400" />
+          <span className="text-[9px] text-dim uppercase tracking-widest mr-0.5">STR</span>
+          <span className="text-[10px] font-bold text-orange-400">{streak}</span>
+        </div>
       </div>
 
-      {/* Right: Time + XP + Sign Out */}
-      <div className="flex items-center gap-3 md:gap-5">
-        <div className="flex items-center gap-1.5">
-          <Clock size={14} strokeWidth={1.5} className="text-dim" />
-          <span className="text-xs text-muted tabular-nums font-medium">
-            {time}
-            <span className="text-dim ml-1 hidden sm:inline">{tz}</span>
+      {/* Right: Time (desktop only) + XP + Sign Out */}
+      <div className="flex items-center gap-2 md:gap-4">
+        {/* Time — hidden on mobile */}
+        <div className="hidden md:flex items-center gap-1.5">
+          <Clock size={12} strokeWidth={1.5} className="text-dim" />
+          <span className="text-[10px] text-muted tabular-nums font-medium tracking-wider">
+            {time} {tz}
           </span>
         </div>
 
-        <div className="w-px h-4 bg-card-border" />
+        <div className="hidden md:block w-px h-4 bg-card-border" />
 
-        <div className="flex items-center gap-1.5">
-          <Zap size={14} strokeWidth={1.5} className="text-violet" />
-          <span className="text-xs text-muted font-medium hidden sm:inline">
-            XP
-          </span>
-          <span
-            className="text-sm font-bold text-violet xp-glow"
-            style={
-              { "--glow-intensity": glowIntensity } as React.CSSProperties
-            }
-          >
+        {/* XP */}
+        <div className="flex items-baseline gap-1">
+          <span className="text-[9px] text-dim uppercase tracking-widest">XP</span>
+          <span className="text-[11px] font-bold text-violet font-mono tracking-tight">
             {xp.toLocaleString()}
           </span>
         </div>
 
-        <div className="w-px h-4 bg-card-border" />
-
+        {/* Sign Out */}
         <button
           onClick={signOut}
-          className="flex items-center gap-1.5 text-xs text-muted hover:text-red-400 transition-colors cursor-pointer"
+          className="p-1 text-muted hover:text-red-400 transition-colors cursor-pointer"
           title="Sign out"
         >
-          <LogOut size={14} strokeWidth={1.5} />
-          <span className="hidden sm:inline">SIGN OUT</span>
+          <LogOut size={13} strokeWidth={1.5} />
         </button>
       </div>
+
+      {/* Progress Underline */}
+      <motion.div
+        className="absolute bottom-0 left-0 h-px"
+        initial={{ width: 0 }}
+        animate={{ width: `${levelData.levelProgress}%` }}
+        transition={{ duration: 0.8, ease: "easeOut" }}
+        style={{
+          background: "#06B6D4",
+          boxShadow: "0 0 6px rgba(6, 182, 212, 0.6), 0 0 12px rgba(6, 182, 212, 0.3)",
+        }}
+      />
     </motion.header>
   );
 }
