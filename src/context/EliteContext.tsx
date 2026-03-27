@@ -191,9 +191,45 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         penalty: r.penalty,
       }));
 
+      // ── Client-side streak computation ──
+      // Streak increments when the user opens the app on a new day (after midnight)
+      // AND they completed at least one habit/NN the previous day.
+      // last_check_in is set whenever a habit/NN is toggled on.
+      // last_habit_reset tracks the last day the cron (or client) processed the day rollover.
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const yesterdayStr = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
+      const lastCheckInDay = profile.last_check_in
+        ? profile.last_check_in.slice(0, 10)
+        : null;
+      const lastResetDay = profile.last_habit_reset ?? null;
+
+      let computedStreak = profile.streak;
+
+      // Only recompute if we haven't already processed today
+      if (lastResetDay !== todayStr) {
+        if (lastCheckInDay === yesterdayStr) {
+          // User completed something yesterday → streak continues
+          computedStreak = profile.streak + 1;
+        } else if (lastCheckInDay === todayStr) {
+          // User already checked in today, streak unchanged
+          computedStreak = profile.streak;
+        } else {
+          // Missed yesterday entirely → streak breaks
+          computedStreak = lastCheckInDay ? 0 : profile.streak;
+        }
+      }
+
+      // Persist streak change AND mark today as processed so refreshes don't re-increment
+      if (lastResetDay !== todayStr) {
+        await supabase
+          .from("operator_profile")
+          .update({ streak: computedStreak, last_habit_reset: todayStr })
+          .eq("id", userId);
+      }
+
       const loadedState: EliteState = {
         xp: profile.xp,
-        streak: profile.streak,
+        streak: computedStreak,
         lastCheckIn: profile.last_check_in,
         lastHabitReset: profile.last_habit_reset,
         initializedAt: profile.initialized_at,
@@ -202,9 +238,6 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         nonNegotiables,
         logs,
       };
-
-      // Daily reset is handled server-side by the daily-reset Edge Function.
-      // The context simply trusts the database state.
 
       if (!cancelled) {
         setState(loadedState);

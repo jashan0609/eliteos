@@ -81,7 +81,7 @@ export default function AddObjectiveModal({
                              }`}
                 >
                   <Star size={14} strokeWidth={1.5} />
-                  North Star
+                  Long Term
                 </button>
                 <button
                   onClick={() => setType("sprint")}
@@ -93,7 +93,7 @@ export default function AddObjectiveModal({
                              }`}
                 >
                   <Rocket size={14} strokeWidth={1.5} />
-                  Sprint
+                  Short Term
                 </button>
               </div>
             </div>

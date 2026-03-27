@@ -71,7 +71,7 @@ export default function OperatorLogin() {
               textTransform: "uppercase",
             }}
           >
-            Operator Authentication
+            Sign In
           </p>
         </div>
 
@@ -89,7 +89,7 @@ export default function OperatorLogin() {
                 fontWeight: 600,
               }}
             >
-              Operator ID
+              Email
             </label>
             <input
               type="email"
@@ -102,7 +102,7 @@ export default function OperatorLogin() {
                 }
               }}
               enterKeyHint="next"
-              placeholder="operator@elite.os"
+              placeholder="you@example.com"
               required
               autoComplete="email"
               style={{
@@ -131,7 +131,7 @@ export default function OperatorLogin() {
                 fontWeight: 600,
               }}
             >
-              Passphrase
+              Password
             </label>
             <input
               ref={passwordRef}
@@ -212,10 +212,10 @@ export default function OperatorLogin() {
             }}
           >
             {loading
-              ? "AUTHENTICATING..."
+              ? "SIGNING IN..."
               : mode === "login"
-                ? "INITIATE SESSION"
-                : "REGISTER OPERATOR"}
+                ? "SIGN IN"
+                : "CREATE ACCOUNT"}
           </button>
         </form>
 
@@ -228,7 +228,7 @@ export default function OperatorLogin() {
             color: "#888",
           }}
         >
-          {mode === "login" ? "No credentials? " : "Already registered? "}
+          {mode === "login" ? "Don't have an account? " : "Already have an account? "}
           <button
             type="button"
             onClick={() => {

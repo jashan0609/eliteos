@@ -2,21 +2,29 @@
 
 import { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Clock, Zap, Flame } from "lucide-react";
+import { Clock, Zap, Flame, LogOut } from "lucide-react";
 import { useElite } from "@/context/EliteContext";
+import { useAuth } from "@/context/AuthContext";
 
 export default function Header() {
   const { xp, streak } = useElite();
+  const { signOut } = useAuth();
   const [time, setTime] = useState("");
+  const [tz, setTz] = useState("");
 
   useEffect(() => {
     const update = () => {
       const now = new Date();
-      const h = String(now.getUTCHours()).padStart(2, "0");
-      const m = String(now.getUTCMinutes()).padStart(2, "0");
-      const s = String(now.getUTCSeconds()).padStart(2, "0");
+      const h = String(now.getHours()).padStart(2, "0");
+      const m = String(now.getMinutes()).padStart(2, "0");
+      const s = String(now.getSeconds()).padStart(2, "0");
       setTime(`${h}:${m}:${s}`);
     };
+    // Get short timezone name (e.g. "IST", "GMT", "EST")
+    const tzName = Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
+      .formatToParts(new Date())
+      .find((p) => p.type === "timeZoneName")?.value ?? "";
+    setTz(tzName);
     update();
     const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
@@ -31,16 +39,7 @@ export default function Header() {
       transition={{ duration: 0.3, ease: "easeOut" }}
       className="h-14 bg-bg border-b border-card-border flex items-center justify-between px-4 md:px-6 shrink-0"
     >
-      {/* Left: Operator Status */}
-      <div className="flex items-center gap-2">
-        <div className="w-2 h-2 rounded-full bg-cyan animate-pulse" />
-        <span className="text-xs text-muted font-medium hidden sm:inline">
-          OPERATOR_STATUS:
-        </span>
-        <span className="text-xs text-cyan font-semibold">ACTIVE</span>
-      </div>
-
-      {/* Center: Daily Streak */}
+      {/* Left: Daily Streak */}
       <div className="flex items-center gap-2">
         <Flame
           size={16}
@@ -52,13 +51,13 @@ export default function Header() {
         </span>
       </div>
 
-      {/* Right: Time + XP */}
+      {/* Right: Time + XP + Sign Out */}
       <div className="flex items-center gap-3 md:gap-5">
         <div className="flex items-center gap-1.5">
           <Clock size={14} strokeWidth={1.5} className="text-dim" />
           <span className="text-xs text-muted tabular-nums font-medium">
             {time}
-            <span className="text-dim ml-1 hidden sm:inline">UTC</span>
+            <span className="text-dim ml-1 hidden sm:inline">{tz}</span>
           </span>
         </div>
 
@@ -78,6 +77,17 @@ export default function Header() {
             {xp.toLocaleString()}
           </span>
         </div>
+
+        <div className="w-px h-4 bg-card-border" />
+
+        <button
+          onClick={signOut}
+          className="flex items-center gap-1.5 text-xs text-muted hover:text-red-400 transition-colors cursor-pointer"
+          title="Sign out"
+        >
+          <LogOut size={14} strokeWidth={1.5} />
+          <span className="hidden sm:inline">SIGN OUT</span>
+        </button>
       </div>
     </motion.header>
   );

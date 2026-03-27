@@ -40,7 +40,7 @@ export default function ObjectivesView() {
           <div className="flex items-center gap-2 mb-3">
             <Star size={14} strokeWidth={1.5} className="text-violet" />
             <h3 className="text-xs font-semibold text-muted uppercase tracking-wider">
-              North Stars
+              Long Term
             </h3>
           </div>
           <div className="grid grid-cols-1 gap-3">
@@ -62,7 +62,7 @@ export default function ObjectivesView() {
           <div className="flex items-center gap-2 mb-3">
             <Rocket size={14} strokeWidth={1.5} className="text-cyan" />
             <h3 className="text-xs font-semibold text-muted uppercase tracking-wider">
-              Sprints
+              Short Term
             </h3>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -160,7 +160,7 @@ function ObjectiveCard({
           <span
             className={`text-[10px] font-semibold uppercase tracking-wider ${accentClass}`}
           >
-            {isNorthStar ? "North Star" : "Sprint"}
+            {isNorthStar ? "Long Term" : "Short Term"}
           </span>
         </div>
 

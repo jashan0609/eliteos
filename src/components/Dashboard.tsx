@@ -21,12 +21,12 @@ const TAB_CONTENT: Record<
 > = {
   dashboard: {
     title: "Your Protocol",
-    subtitle: "Overview of your current sprint and activity",
+    subtitle: "Overview of your goals and activity",
     icon: Zap,
     accent: "text-violet",
   },
   objectives: {
-    title: "Current Sprint",
+    title: "Goals",
     subtitle: "Track your objectives, milestones, and key results",
     icon: Target,
     accent: "text-cyan",
@@ -56,21 +56,9 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ activeTab }: DashboardProps) {
-  const { objectives, dailyHabits, nonNegotiables, xp, initializedAt } =
-    useElite();
+  const { objectives, dailyHabits, nonNegotiables, xp } = useElite();
   const tab = TAB_CONTENT[activeTab];
   const TabIcon = tab.icon;
-
-  // Squandered potential calculation
-  const MAX_DAILY_XP = 150;
-  const msPerDay = 1000 * 60 * 60 * 24;
-  const daysActive = Math.max(
-    1,
-    Math.ceil((Date.now() - new Date(initializedAt).getTime()) / msPerDay)
-  );
-  const potentialXP = daysActive * MAX_DAILY_XP;
-  const potentialWasted = Math.max(0, potentialXP - xp);
-  const xpRatio = potentialXP > 0 ? (xp / potentialXP) * 100 : 0;
 
   // Derive stats
   const completedObjectives = objectives.filter(
@@ -154,7 +142,7 @@ export default function Dashboard({ activeTab }: DashboardProps) {
                       </span>
                     </div>
                     <h3 className="text-sm font-semibold text-text mb-1">
-                      Sprint Progress
+                      Goal Progress
                     </h3>
                     <p className="text-xs text-muted">
                       {completedObjectives} of {totalObjectives} objectives done
@@ -284,76 +272,6 @@ export default function Dashboard({ activeTab }: DashboardProps) {
                 </div>
               </motion.div>
 
-              {/* System Analytics — Squandered Potential */}
-              <motion.div
-                initial={{ opacity: 0, y: 16 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.5, duration: 0.35 }}
-                className="glass p-4 md:p-5 mt-4"
-              >
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="text-xs font-semibold text-muted uppercase tracking-wider">
-                    System Analytics
-                  </h3>
-                  <span className="text-[10px] text-dim">
-                    {daysActive} day{daysActive !== 1 && "s"} active
-                  </span>
-                </div>
-
-                <div className="glass p-4 md:p-5 border border-pink/20">
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-[10px] font-semibold text-pink uppercase tracking-wider">
-                      SQUANDERED_POTENTIAL
-                    </span>
-                    <span className="text-[10px] text-muted">
-                      {xp.toLocaleString()} / {potentialXP.toLocaleString()} XP
-                    </span>
-                  </div>
-
-                  <p className="text-4xl font-bold text-pink mt-3 mb-1 tabular-nums">
-                    {potentialWasted.toLocaleString()}
-                    <span className="text-base font-semibold text-pink/60 ml-1">
-                      XP
-                    </span>
-                  </p>
-                  <p className="text-[11px] text-muted mb-5">
-                    lost to inaction
-                  </p>
-
-                  {/* Progress bar */}
-                  <div
-                    className="w-full h-2.5 rounded-full overflow-hidden relative"
-                    style={{
-                      backgroundColor: "rgba(244, 63, 94, 0.12)",
-                      boxShadow: "inset 0 0 12px rgba(244, 63, 94, 0.15)",
-                    }}
-                  >
-                    <motion.div
-                      className="h-full rounded-full relative z-10"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${xpRatio}%` }}
-                      transition={{
-                        duration: 0.8,
-                        ease: "easeOut",
-                        delay: 0.6,
-                      }}
-                      style={{
-                        backgroundColor: "#8B5CF6",
-                        boxShadow:
-                          "0 0 10px rgba(139, 92, 246, 0.5), 0 0 20px rgba(139, 92, 246, 0.25)",
-                      }}
-                    />
-                  </div>
-                  <div className="flex items-center justify-between mt-2">
-                    <span className="text-[10px] text-violet font-semibold">
-                      {Math.round(xpRatio)}% captured
-                    </span>
-                    <span className="text-[10px] text-pink font-semibold">
-                      {Math.round(100 - xpRatio)}% wasted
-                    </span>
-                  </div>
-                </div>
-              </motion.div>
             </>
           )}
 
