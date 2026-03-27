@@ -12,6 +12,7 @@ import {
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import XPToast from "@/components/XPToast";
+import LevelUpToast from "@/components/LevelUpToast";
 
 // ── Types ──
 
@@ -61,24 +62,30 @@ export interface LevelData {
   xpForNextLevel: number;
 }
 
+const RANK_TIERS = [
+  { level: 1, name: "BEGINNER",   min: 0,      max: 999    },
+  { level: 2, name: "AMATEUR",    min: 1_000,  max: 4_999  },
+  { level: 3, name: "DISCIPLINED",min: 5_000,  max: 14_999 },
+  { level: 4, name: "CHAMPION",   min: 15_000, max: 29_999 },
+  { level: 5, name: "MASTER",     min: 30_000, max: 49_999 },
+  { level: 6, name: "ELITE",      min: 50_000, max: Infinity },
+] as const;
+
 export function getLevelData(xp: number): LevelData {
-  const currentLevel = Math.floor(Math.sqrt(xp / 50)) + 1;
-  const xpForCurrentLevel = (currentLevel - 1) ** 2 * 50;
-  const xpForNextLevel = currentLevel ** 2 * 50;
+  const tier = RANK_TIERS.find((t) => xp <= t.max) ?? RANK_TIERS[RANK_TIERS.length - 1];
+  const xpForCurrentLevel = tier.min;
+  const xpForNextLevel = tier.max === Infinity ? tier.min : tier.max + 1;
+  const range = xpForNextLevel - xpForCurrentLevel;
   const levelProgress =
-    xpForNextLevel > xpForCurrentLevel
-      ? ((xp - xpForCurrentLevel) / (xpForNextLevel - xpForCurrentLevel)) * 100
-      : 0;
+    tier.max === Infinity ? 100 : ((xp - tier.min) / range) * 100;
 
-  let rankName: string;
-  if (xp >= 50_000) rankName = "ELITE";
-  else if (xp >= 30_000) rankName = "MASTER";
-  else if (xp >= 15_000) rankName = "CHAMPION";
-  else if (xp >= 5_000) rankName = "DISCIPLINED";
-  else if (xp >= 1_000) rankName = "AMATEUR";
-  else rankName = "BEGINNER";
-
-  return { currentLevel, rankName, levelProgress, xpForCurrentLevel, xpForNextLevel };
+  return {
+    currentLevel: tier.level,
+    rankName: tier.name,
+    levelProgress: Math.min(Math.max(levelProgress, 0), 100),
+    xpForCurrentLevel,
+    xpForNextLevel,
+  };
 }
 
 interface EliteContextValue extends EliteState {
@@ -116,6 +123,14 @@ export function useElite(): EliteContextValue {
   return ctx;
 }
 
+// ── Haptic feedback (mobile only) ──
+
+function haptic(pattern: number | number[] = 8) {
+  if (typeof window !== "undefined" && "vibrate" in navigator) {
+    navigator.vibrate(pattern);
+  }
+}
+
 // ── Helper: update profile column(s) ──
 
 async function patchProfile(
@@ -135,12 +150,20 @@ export function EliteProvider({ children }: { children: ReactNode }) {
   // Prevents rapid-fire toggles from creating race conditions
   const pendingToggles = useRef<Set<string>>(new Set());
 
-  // Toast state
+  // XP Toast state
   const [toast, setToast] = useState({
     show: false,
     type: "gain" as "gain" | "loss",
     amount: 0,
     message: "",
+  });
+
+  // Level-up toast state
+  const [levelUpToast, setLevelUpToast] = useState({
+    show: false,
+    level: 1,
+    rankName: "BEGINNER",
+    isRankUp: false,
   });
 
   // ── Fetch all data from Supabase on login ──
@@ -250,11 +273,20 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         }
       }
 
-      // Persist streak change AND mark today as processed so refreshes don't re-increment
+      // Detect user's local timezone from browser
+      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+      // Persist streak change, mark today as processed, and save timezone
       if (lastResetDay !== todayStr) {
         await supabase
           .from("operator_profile")
-          .update({ streak: computedStreak, last_habit_reset: todayStr })
+          .update({ streak: computedStreak, last_habit_reset: todayStr, timezone: userTimezone })
+          .eq("id", userId);
+      } else {
+        // Always keep timezone up to date even if streak didn't change
+        await supabase
+          .from("operator_profile")
+          .update({ timezone: userTimezone })
           .eq("id", userId);
       }
 
@@ -293,7 +325,27 @@ export function EliteProvider({ children }: { children: ReactNode }) {
   const updateXP = useCallback(
     (amount: number) => {
       setState((prev) => {
+        const oldData = getLevelData(prev.xp);
         const newXp = Math.max(0, prev.xp + amount);
+        const newData = getLevelData(newXp);
+
+        if (amount > 0) {
+          const isRankUp = newData.rankName !== oldData.rankName;
+          const isLevelUp = newData.currentLevel > oldData.currentLevel;
+          if (isLevelUp || isRankUp) {
+            setLevelUpToast({
+              show: true,
+              level: newData.currentLevel,
+              rankName: newData.rankName,
+              isRankUp,
+            });
+            setTimeout(
+              () => setLevelUpToast((t) => ({ ...t, show: false })),
+              4000
+            );
+          }
+        }
+
         if (user) patchProfile(user.id, { xp: newXp });
         return { ...prev, xp: newXp };
       });
@@ -369,6 +421,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         };
       });
 
+      if (completing) haptic([6, 30, 6]);
       showToast(completing ? "gain" : "loss", 15, completing ? "+15 XP" : "-15 XP");
 
       // Persist to DB — rollback on failure
@@ -460,6 +513,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         };
       });
 
+      if (completing) haptic([10, 40, 10]);
       showToast(completing ? "gain" : "loss", 30, completing ? "+30 XP" : "-30 XP");
 
       // Persist to DB — rollback on failure
@@ -547,7 +601,8 @@ export function EliteProvider({ children }: { children: ReactNode }) {
               progress: next,
               ...(justCompleted ? { status: "Completed" } : {}),
             })
-            .eq("id", id);
+            .eq("id", id)
+            .then(() => {});
           if (xpReward > 0) {
             patchProfile(user.id, { xp: newXp });
           }
@@ -609,6 +664,12 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         type={toast.type}
         amount={toast.amount}
         message={toast.message}
+      />
+      <LevelUpToast
+        show={levelUpToast.show}
+        level={levelUpToast.level}
+        rankName={levelUpToast.rankName}
+        isRankUp={levelUpToast.isRankUp}
       />
     </EliteContext.Provider>
   );

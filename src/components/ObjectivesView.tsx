@@ -10,8 +10,8 @@ export default function ObjectivesView() {
   const { objectives, addObjective, incrementObjectiveProgress } = useElite();
   const [modalOpen, setModalOpen] = useState(false);
 
-  const northStars = objectives.filter((o) => o.type === "north-star");
-  const sprints = objectives.filter((o) => o.type === "sprint");
+  const northStars = objectives.filter((o) => o.type === "north-star" && o.status !== "Completed");
+  const sprints = objectives.filter((o) => o.type === "sprint" && o.status !== "Completed");
 
   return (
     <>
@@ -19,8 +19,8 @@ export default function ObjectivesView() {
       <div className="flex items-center justify-between mb-5">
         <div>
           <p className="text-xs text-muted uppercase tracking-wider">
-            {objectives.length} Objective{objectives.length !== 1 && "s"} ·{" "}
-            {objectives.filter((o) => o.status === "Active").length} Active
+            {northStars.length + sprints.length} Active ·{" "}
+            {objectives.filter((o) => o.status === "Completed").length} Completed
           </p>
         </div>
         <button

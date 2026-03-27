@@ -1,35 +1,71 @@
 "use client";
 
 import { motion } from "framer-motion";
-import { BookOpen, Check, X, Shield, Sparkles } from "lucide-react";
+import { BookOpen, Check, X, Shield, Sparkles, Trophy, Star, Rocket } from "lucide-react";
 import { useElite } from "@/context/EliteContext";
 
 export default function LogsView() {
-  const { logs } = useElite();
+  const { logs, objectives } = useElite();
+  const completedGoals = objectives.filter((o) => o.status === "Completed");
 
-  if (logs.length === 0) {
-    return (
-      <motion.div
-        initial={{ opacity: 0, scale: 0.98 }}
-        animate={{ opacity: 1, scale: 1 }}
-        className="glass p-8 md:p-12 text-center"
-      >
-        <div className="w-16 h-16 rounded-2xl bg-card-border/30 flex items-center justify-center mb-5 mx-auto">
-          <BookOpen size={28} strokeWidth={1.5} className="text-muted" />
-        </div>
-        <h3 className="text-base font-semibold text-text mb-2">
-          No system logs found
-        </h3>
-        <p className="text-sm text-muted max-w-xs mx-auto">
-          Complete a day to generate telemetry. Logs archive automatically at
-          each daily reset.
-        </p>
-      </motion.div>
-    );
-  }
 
   return (
     <div className="space-y-3">
+      {/* Completed Goals */}
+      {completedGoals.length > 0 && (
+        <div className="mb-2">
+          <p className="text-[10px] text-muted font-semibold uppercase tracking-wider mb-3">
+            Achieved Goals
+          </p>
+          <div className="space-y-2">
+            {completedGoals.map((goal, i) => (
+              <motion.div
+                key={goal.id}
+                initial={{ opacity: 0, y: 8 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.05, duration: 0.3 }}
+                className="glass p-4 flex items-center gap-3"
+                style={{ borderColor: "rgba(139,92,246,0.2)" }}
+              >
+                <div className="p-1.5 rounded-lg bg-violet/10">
+                  {goal.type === "north-star" ? (
+                    <Star size={14} strokeWidth={1.5} className="text-violet" />
+                  ) : (
+                    <Rocket size={14} strokeWidth={1.5} className="text-cyan" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-text truncate">{goal.title}</p>
+                  <p className="text-[10px] text-muted truncate">{goal.description}</p>
+                </div>
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <Trophy size={12} strokeWidth={1.5} className="text-violet" />
+                  <span className="text-[10px] font-bold text-violet">
+                    +{goal.type === "north-star" ? "500" : "200"} XP
+                  </span>
+                </div>
+              </motion.div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {logs.length === 0 && completedGoals.length === 0 && (
+        <motion.div
+          initial={{ opacity: 0, scale: 0.98 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="glass p-8 md:p-12 text-center"
+        >
+          <div className="w-16 h-16 rounded-2xl bg-card-border/30 flex items-center justify-center mb-5 mx-auto">
+            <BookOpen size={28} strokeWidth={1.5} className="text-muted" />
+          </div>
+          <h3 className="text-base font-semibold text-text mb-2">No system logs found</h3>
+          <p className="text-sm text-muted max-w-xs mx-auto">
+            Complete a day to generate telemetry. Logs archive automatically at each daily reset.
+          </p>
+        </motion.div>
+      )}
+
       {logs.map((log, i) => {
         const nnHit = log.nnSummary.filter((n) => n.completed).length;
         const nnTotal = log.nnSummary.length;

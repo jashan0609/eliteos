@@ -4,9 +4,15 @@ import { supabaseAdmin } from "@/lib/supabase-admin";
 const PENALTY_PER_NN = 60;
 const MS_PER_DAY = 86_400_000;
 
-/** Return "YYYY-MM-DD" for a Date */
-function toDateStr(d: Date): string {
-  return d.toISOString().slice(0, 10);
+/** Return "YYYY-MM-DD" in a given IANA timezone (e.g. "Asia/Kolkata") */
+function toDateStr(d: Date, timezone = "UTC"): string {
+  try {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: timezone })
+      .format(d)
+      .slice(0, 10);
+  } catch {
+    return d.toISOString().slice(0, 10);
+  }
 }
 
 /** Return every date string between `from` (inclusive) and `to` (exclusive) */
@@ -28,14 +34,11 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  const today = toDateStr(new Date());
-
   try {
-    // ── Fetch all operators that haven't been reset today ──
+    // ── Fetch all operators ──
     const { data: profiles, error: profileErr } = await supabaseAdmin
       .from("operator_profile")
-      .select("id, xp, streak, last_check_in, last_habit_reset")
-      .or(`last_habit_reset.is.null,last_habit_reset.neq.${today}`);
+      .select("id, xp, streak, last_check_in, last_habit_reset, timezone");
 
     if (profileErr) throw profileErr;
     if (!profiles || profiles.length === 0) {
@@ -46,6 +49,12 @@ export async function GET(req: Request) {
 
     for (const profile of profiles) {
       const userId = profile.id;
+      const userTz = profile.timezone ?? "UTC";
+      const today = toDateStr(new Date(), userTz);
+      const yesterdayStr = toDateStr(new Date(Date.now() - MS_PER_DAY), userTz);
+
+      // Skip if already reset today in user's timezone
+      if (profile.last_habit_reset === today) continue;
 
       // ── Fetch habits in parallel ──
       const [nnRes, dhRes] = await Promise.all([
@@ -120,7 +129,6 @@ export async function GET(req: Request) {
       }
 
       // ── Global streak: if user didn't check in yesterday, reset to 0 ──
-      const yesterdayStr = toDateStr(new Date(Date.now() - MS_PER_DAY));
       const lastCheckInDay = profile.last_check_in
         ? profile.last_check_in.slice(0, 10)
         : null;
@@ -148,7 +156,7 @@ export async function GET(req: Request) {
     return NextResponse.json({
       message: "Daily reset complete",
       processed: processedCount,
-      date: today,
+      date: toDateStr(new Date()),
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);

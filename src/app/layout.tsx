@@ -13,11 +13,23 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   maximumScale: 1,
+  userScalable: false,
+  viewportFit: "cover",
+  themeColor: "#8b5cf6",
 };
 
 export const metadata: Metadata = {
   title: "EliteOS — Your Operating System",
   description: "High-performance personal operating system",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "EliteOS",
+  },
+  formatDetection: {
+    telephone: false,
+  },
 };
 
 export default function RootLayout({

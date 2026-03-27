@@ -17,6 +17,26 @@
   -webkit-tap-highlight-color: transparent;
 }
 
+/* ── PWA / Safe Area ── */
+:root {
+  --sat: env(safe-area-inset-top, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+}
+
+/* Push the header down on notch devices when running as standalone PWA */
+@media (display-mode: standalone) {
+  header {
+    padding-top: var(--sat);
+    height: calc(3rem + var(--sat));
+  }
+  /* Ensure bottom nav doesn't sit behind iPhone home bar */
+  nav {
+    padding-bottom: var(--sab);
+  }
+}
+
 /* Ensure buttons always receive touches */
 button {
   touch-action: manipulation;
