@@ -21,7 +21,7 @@ export default function XPToast({ show, type, amount, message }: XPToastProps) {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: -30, scale: 0.9 }}
           transition={{ duration: 0.4, ease: "easeOut" }}
-          className="fixed bottom-24 md:bottom-8 left-1/2 -translate-x-1/2 z-[70]"
+          className="fixed bottom-24 md:bottom-8 left-1/2 -translate-x-1/2 z-70"
         >
           <div
             className="glass flex items-center gap-3 px-5 py-3"

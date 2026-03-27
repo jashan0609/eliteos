@@ -94,8 +94,14 @@ interface EliteContextValue extends EliteState {
   updateXP: (amount: number) => void;
   addObjective: (obj: Omit<Objective, "id" | "progress" | "status">) => void;
   incrementObjectiveProgress: (id: string) => void;
+  deleteObjective: (id: string) => void;
+  editObjective: (id: string, data: { title: string; description: string }) => void;
   addDailyHabit: (title: string) => void;
+  editDailyHabit: (id: string, title: string) => void;
+  deleteDailyHabit: (id: string) => void;
   addNonNegotiable: (title: string) => void;
+  editNonNegotiable: (id: string, title: string) => void;
+  deleteNonNegotiable: (id: string) => void;
   toggleDailyHabit: (id: string) => void;
   toggleNonNegotiable: (id: string) => void;
   showToast: (type: "gain" | "loss", amount: number, message: string) => void;
@@ -394,6 +400,27 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     [user]
   );
 
+  const editDailyHabit = useCallback(
+    (id: string, title: string) => {
+      if (!user) return;
+      setState((prev) => ({
+        ...prev,
+        dailyHabits: prev.dailyHabits.map((h) => h.id === id ? { ...h, title } : h),
+      }));
+      supabase.from("daily_habits").update({ title }).eq("id", id).then(() => {});
+    },
+    [user]
+  );
+
+  const deleteDailyHabit = useCallback(
+    (id: string) => {
+      if (!user) return;
+      setState((prev) => ({ ...prev, dailyHabits: prev.dailyHabits.filter((h) => h.id !== id) }));
+      supabase.from("daily_habits").delete().eq("id", id).then(() => {});
+    },
+    [user]
+  );
+
   const toggleDailyHabit = useCallback(
     (id: string) => {
       // Guard: block rapid-fire clicks while DB call is in flight
@@ -483,6 +510,27 @@ export function EliteProvider({ children }: { children: ReactNode }) {
             }));
           }
         });
+    },
+    [user]
+  );
+
+  const editNonNegotiable = useCallback(
+    (id: string, title: string) => {
+      if (!user) return;
+      setState((prev) => ({
+        ...prev,
+        nonNegotiables: prev.nonNegotiables.map((h) => h.id === id ? { ...h, title } : h),
+      }));
+      supabase.from("non_negotiables").update({ title }).eq("id", id).then(() => {});
+    },
+    [user]
+  );
+
+  const deleteNonNegotiable = useCallback(
+    (id: string) => {
+      if (!user) return;
+      setState((prev) => ({ ...prev, nonNegotiables: prev.nonNegotiables.filter((h) => h.id !== id) }));
+      supabase.from("non_negotiables").delete().eq("id", id).then(() => {});
     },
     [user]
   );
@@ -641,6 +689,27 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     [showToast, state.objectives, user]
   );
 
+  const editObjective = useCallback(
+    (id: string, data: { title: string; description: string }) => {
+      if (!user) return;
+      setState((prev) => ({
+        ...prev,
+        objectives: prev.objectives.map((o) => o.id === id ? { ...o, ...data } : o),
+      }));
+      supabase.from("objectives").update({ title: data.title, description: data.description }).eq("id", id).then(() => {});
+    },
+    [user]
+  );
+
+  const deleteObjective = useCallback(
+    (id: string) => {
+      if (!user) return;
+      setState((prev) => ({ ...prev, objectives: prev.objectives.filter((o) => o.id !== id) }));
+      supabase.from("objectives").delete().eq("id", id).then(() => {});
+    },
+    [user]
+  );
+
   const levelData = getLevelData(state.xp);
 
   const value: EliteContextValue = {
@@ -650,8 +719,14 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     updateXP,
     addObjective,
     incrementObjectiveProgress,
+    deleteObjective,
+    editObjective,
     addDailyHabit,
+    editDailyHabit,
+    deleteDailyHabit,
     addNonNegotiable,
+    editNonNegotiable,
+    deleteNonNegotiable,
     toggleDailyHabit,
     toggleNonNegotiable,
     showToast,

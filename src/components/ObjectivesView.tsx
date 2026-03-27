@@ -2,16 +2,27 @@
 
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Plus, Star, Rocket, ChevronUp, Trophy } from "lucide-react";
+import { Plus, Star, Rocket, ChevronUp, Trophy, Pencil, Trash2 } from "lucide-react";
 import { useElite, type Objective } from "@/context/EliteContext";
 import AddObjectiveModal from "./AddObjectiveModal";
 
 export default function ObjectivesView() {
-  const { objectives, addObjective, incrementObjectiveProgress } = useElite();
+  const { objectives, addObjective, incrementObjectiveProgress, editObjective, deleteObjective } = useElite();
   const [modalOpen, setModalOpen] = useState(false);
+  const [editTarget, setEditTarget] = useState<Objective | null>(null);
 
   const northStars = objectives.filter((o) => o.type === "north-star" && o.status !== "Completed");
   const sprints = objectives.filter((o) => o.type === "sprint" && o.status !== "Completed");
+
+  const openEdit = (obj: Objective) => {
+    setEditTarget(obj);
+    setModalOpen(true);
+  };
+
+  const closeModal = () => {
+    setModalOpen(false);
+    setEditTarget(null);
+  };
 
   return (
     <>
@@ -24,7 +35,7 @@ export default function ObjectivesView() {
           </p>
         </div>
         <button
-          onClick={() => setModalOpen(true)}
+          onClick={() => { setEditTarget(null); setModalOpen(true); }}
           className="flex items-center gap-2 px-4 py-2 rounded-xl bg-violet text-white text-xs font-semibold
                      cursor-pointer transition-all duration-200
                      hover:shadow-[0_0_20px_rgba(139,92,246,0.25)] active:scale-95"
@@ -50,6 +61,8 @@ export default function ObjectivesView() {
                 objective={obj}
                 index={i}
                 onIncrement={incrementObjectiveProgress}
+                onEdit={openEdit}
+                onDelete={deleteObjective}
               />
             ))}
           </div>
@@ -72,6 +85,8 @@ export default function ObjectivesView() {
                 objective={obj}
                 index={i}
                 onIncrement={incrementObjectiveProgress}
+                onEdit={openEdit}
+                onDelete={deleteObjective}
               />
             ))}
           </div>
@@ -82,7 +97,7 @@ export default function ObjectivesView() {
         <div className="glass p-10 text-center">
           <p className="text-muted text-sm mb-3">No objectives yet</p>
           <button
-            onClick={() => setModalOpen(true)}
+            onClick={() => { setEditTarget(null); setModalOpen(true); }}
             className="text-violet text-xs font-semibold cursor-pointer hover:underline"
           >
             Create your first objective
@@ -92,8 +107,10 @@ export default function ObjectivesView() {
 
       <AddObjectiveModal
         open={modalOpen}
-        onClose={() => setModalOpen(false)}
+        onClose={closeModal}
         onAdd={addObjective}
+        editData={editTarget ?? undefined}
+        onEdit={editObjective}
       />
     </>
   );
@@ -103,10 +120,14 @@ function ObjectiveCard({
   objective,
   index,
   onIncrement,
+  onEdit,
+  onDelete,
 }: {
   objective: Objective;
   index: number;
   onIncrement: (id: string) => void;
+  onEdit: (obj: Objective) => void;
+  onDelete: (id: string) => void;
 }) {
   const [justCompleted, setJustCompleted] = useState(false);
   const isNorthStar = objective.type === "north-star";
@@ -116,10 +137,7 @@ function ObjectiveCard({
 
   const handleIncrement = () => {
     if (isComplete) return;
-    // Check if this increment will complete the objective
-    if (objective.progress + 10 >= 100) {
-      setJustCompleted(true);
-    }
+    if (objective.progress + 10 >= 100) setJustCompleted(true);
     onIncrement(objective.id);
   };
 
@@ -145,9 +163,7 @@ function ObjectiveCard({
           ? { boxShadow: { duration: 1.2, times: [0, 0.3, 0.7, 1] } }
           : { delay: index * 0.08, duration: 0.35 }
       }
-      onAnimationComplete={() => {
-        if (justCompleted) setJustCompleted(false);
-      }}
+      onAnimationComplete={() => { if (justCompleted) setJustCompleted(false); }}
       className="glass glass-hover p-5 group"
     >
       <div className="flex items-start justify-between mb-3">
@@ -157,56 +173,61 @@ function ObjectiveCard({
           ) : (
             <Rocket size={16} strokeWidth={1.5} className="text-cyan" />
           )}
-          <span
-            className={`text-[10px] font-semibold uppercase tracking-wider ${accentClass}`}
-          >
+          <span className={`text-[10px] font-semibold uppercase tracking-wider ${accentClass}`}>
             {isNorthStar ? "Long Term" : "Short Term"}
           </span>
         </div>
 
-        <AnimatePresence mode="wait">
-          {isComplete ? (
-            <motion.div
-              key="achieved"
-              initial={{ scale: 0, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              transition={{ type: "spring", stiffness: 400, damping: 20 }}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
-              style={{
-                backgroundColor: `${accent}1A`,
-                boxShadow: `0 0 12px ${accent}33`,
-              }}
-            >
-              <Trophy size={12} strokeWidth={2} style={{ color: accent }} />
-              <span
-                className="text-[10px] font-bold uppercase tracking-wider"
-                style={{ color: accent }}
+        <div className="flex items-center gap-1">
+          <AnimatePresence mode="wait">
+            {isComplete ? (
+              <motion.div
+                key="achieved"
+                initial={{ scale: 0, opacity: 0 }}
+                animate={{ scale: 1, opacity: 1 }}
+                transition={{ type: "spring", stiffness: 400, damping: 20 }}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg"
+                style={{ backgroundColor: `${accent}1A`, boxShadow: `0 0 12px ${accent}33` }}
               >
-                Achieved
-              </span>
-            </motion.div>
-          ) : (
-            <motion.span
-              key="status"
-              className="text-[10px] font-semibold text-muted"
-            >
-              {objective.status}
-            </motion.span>
+                <Trophy size={12} strokeWidth={2} style={{ color: accent }} />
+                <span className="text-[10px] font-bold uppercase tracking-wider" style={{ color: accent }}>
+                  Achieved
+                </span>
+              </motion.div>
+            ) : (
+              <motion.span key="status" className="text-[10px] font-semibold text-muted">
+                {objective.status}
+              </motion.span>
+            )}
+          </AnimatePresence>
+
+          {/* Edit / Delete */}
+          {!isComplete && (
+            <div className="flex items-center gap-0.5 ml-1">
+              <button
+                onClick={() => onEdit(objective)}
+                className="p-1.5 rounded-lg text-dim hover:text-muted hover:bg-card-border/30 cursor-pointer transition-colors"
+              >
+                <Pencil size={13} strokeWidth={1.5} />
+              </button>
+              <button
+                onClick={() => onDelete(objective.id)}
+                className="p-1.5 rounded-lg text-dim hover:text-pink hover:bg-pink/10 cursor-pointer transition-colors"
+              >
+                <Trash2 size={13} strokeWidth={1.5} />
+              </button>
+            </div>
           )}
-        </AnimatePresence>
+        </div>
       </div>
 
       <h3 className="text-sm font-bold text-text mb-1.5">{objective.title}</h3>
-      <p className="text-xs text-muted leading-relaxed mb-4">
-        {objective.description}
-      </p>
+      <p className="text-xs text-muted leading-relaxed mb-4">{objective.description}</p>
 
       <div className="mb-2">
         <div className="flex items-center justify-between mb-1.5">
           <span className="text-[10px] text-muted font-medium">Progress</span>
-          <span className={`text-xs font-bold ${accentClass}`}>
-            {objective.progress}%
-          </span>
+          <span className={`text-xs font-bold ${accentClass}`}>{objective.progress}%</span>
         </div>
         <div className="w-full h-1.5 rounded-full bg-card-border/50 overflow-hidden">
           <motion.div
@@ -214,10 +235,7 @@ function ObjectiveCard({
             initial={{ width: 0 }}
             animate={{ width: `${objective.progress}%` }}
             transition={{ duration: 0.6, ease: "easeOut" }}
-            style={{
-              backgroundColor: accent,
-              boxShadow: `0 0 8px ${accent}66, 0 0 16px ${accent}33`,
-            }}
+            style={{ backgroundColor: accent, boxShadow: `0 0 8px ${accent}66, 0 0 16px ${accent}33` }}
           />
         </div>
       </div>
@@ -227,17 +245,13 @@ function ObjectiveCard({
           onClick={handleIncrement}
           className="mt-3 flex items-center gap-1.5 px-4 py-2.5 rounded-xl text-xs font-semibold cursor-pointer
                      transition-all duration-200 active:scale-95"
-          style={{
-            color: accent,
-            backgroundColor: `${accent}15`,
-          }}
+          style={{ color: accent, backgroundColor: `${accent}15` }}
         >
           <ChevronUp size={14} strokeWidth={2} />
           +10%
         </button>
       )}
 
-      {/* Completion XP hint */}
       {!isComplete && objective.progress >= 70 && (
         <p className="text-[10px] text-dim mt-2">
           {isNorthStar ? "+500 XP" : "+200 XP"} on completion
