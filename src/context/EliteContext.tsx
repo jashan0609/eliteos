@@ -252,54 +252,18 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         penalty: r.penalty,
       }));
 
-      // ── Client-side streak computation ──
-      // Streak increments when the user opens the app on a new day (after midnight)
-      // AND they completed at least one habit/NN the previous day.
-      // last_check_in is set whenever a habit/NN is toggled on.
-      // last_habit_reset tracks the last day the cron (or client) processed the day rollover.
-      const todayStr = new Date().toISOString().slice(0, 10);
-      const yesterdayStr = new Date(Date.now() - 86_400_000).toISOString().slice(0, 10);
-      const lastCheckInDay = profile.last_check_in
-        ? profile.last_check_in.slice(0, 10)
-        : null;
-      const lastResetDay = profile.last_habit_reset ?? null;
-
-      let computedStreak = profile.streak;
-
-      // Only recompute if we haven't already processed today
-      if (lastResetDay !== todayStr) {
-        if (lastCheckInDay === yesterdayStr) {
-          // User completed something yesterday → streak continues
-          computedStreak = profile.streak + 1;
-        } else if (lastCheckInDay === todayStr) {
-          // User already checked in today, streak unchanged
-          computedStreak = profile.streak;
-        } else {
-          // Missed yesterday entirely → streak breaks
-          computedStreak = lastCheckInDay ? 0 : profile.streak;
-        }
-      }
-
-      // Detect user's local timezone from browser
+      // Detect user's local timezone from browser.
+      // IMPORTANT: daily reset markers and streak are owned by the server reset job.
+      // Client should not mutate last_habit_reset, otherwise cron skips processing.
       const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-
-      // Persist streak change, mark today as processed, and save timezone
-      if (lastResetDay !== todayStr) {
-        await supabase
-          .from("operator_profile")
-          .update({ streak: computedStreak, last_habit_reset: todayStr, timezone: userTimezone })
-          .eq("id", userId);
-      } else {
-        // Always keep timezone up to date even if streak didn't change
-        await supabase
-          .from("operator_profile")
-          .update({ timezone: userTimezone })
-          .eq("id", userId);
-      }
+      await supabase
+        .from("operator_profile")
+        .update({ timezone: userTimezone })
+        .eq("id", userId);
 
       const loadedState: EliteState = {
         xp: profile.xp,
-        streak: computedStreak,
+        streak: profile.streak,
         lastCheckIn: profile.last_check_in,
         lastHabitReset: profile.last_habit_reset,
         initializedAt: profile.initialized_at,

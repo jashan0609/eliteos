@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 
+export const dynamic = "force-dynamic";
+
 const PENALTY_PER_NN = 60;
 const MS_PER_DAY = 86_400_000;
 
@@ -28,9 +30,17 @@ function dateRange(from: string, to: string): string[] {
 }
 
 export async function GET(req: Request) {
+  const cronSecret = process.env.CRON_SECRET;
+  if (!cronSecret) {
+    return NextResponse.json(
+      { error: "CRON_SECRET is not configured on the server." },
+      { status: 500 }
+    );
+  }
+
   // ── Auth: verify the cron secret ──
   const authHeader = req.headers.get("authorization");
-  if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+  if (authHeader !== `Bearer ${cronSecret}`) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
@@ -38,7 +48,7 @@ export async function GET(req: Request) {
     // ── Fetch all operators ──
     const { data: profiles, error: profileErr } = await supabaseAdmin
       .from("operator_profile")
-      .select("id, xp, streak, last_check_in, last_habit_reset, timezone");
+      .select("*");
 
     if (profileErr) throw profileErr;
     if (!profiles || profiles.length === 0) {
