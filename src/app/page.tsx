@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "@/context/AuthContext";
 import { useElite } from "@/context/EliteContext";
@@ -12,18 +12,16 @@ import Dashboard from "@/components/Dashboard";
 
 export type TabId = "dashboard" | "objectives" | "ghost" | "habits" | "logs";
 
+function getInitialBootState() {
+  if (typeof window === "undefined") return false;
+  return sessionStorage.getItem("elite-booted") === "true";
+}
+
 export default function Home() {
   const { user, loading: authLoading } = useAuth();
   const { loading: dataLoading } = useElite();
-  const [booted, setBooted] = useState(false);
+  const [booted, setBooted] = useState(getInitialBootState);
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
-
-  // Skip boot if already booted this session
-  useEffect(() => {
-    if (sessionStorage.getItem("elite-booted") === "true") {
-      setBooted(true);
-    }
-  }, []);
 
   const handleBootComplete = useCallback(() => {
     sessionStorage.setItem("elite-booted", "true");

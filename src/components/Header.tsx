@@ -6,27 +6,32 @@ import { Clock, Flame, LogOut } from "lucide-react";
 import { useElite } from "@/context/EliteContext";
 import { useAuth } from "@/context/AuthContext";
 
+function getClockTime() {
+  const now = new Date();
+  const h = String(now.getHours()).padStart(2, "0");
+  const m = String(now.getMinutes()).padStart(2, "0");
+  const s = String(now.getSeconds()).padStart(2, "0");
+  return `${h}:${m}:${s}`;
+}
+
+function getTimezoneLabel() {
+  return (
+    Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
+      .formatToParts(new Date())
+      .find((p) => p.type === "timeZoneName")?.value ?? ""
+  );
+}
+
 export default function Header() {
   const { xp, streak, levelData } = useElite();
   const { signOut } = useAuth();
-  const [time, setTime] = useState("");
-  const [tz, setTz] = useState("");
+  const [time, setTime] = useState(getClockTime);
+  const [tz] = useState(getTimezoneLabel);
 
   useEffect(() => {
-    const update = () => {
-      const now = new Date();
-      const h = String(now.getHours()).padStart(2, "0");
-      const m = String(now.getMinutes()).padStart(2, "0");
-      const s = String(now.getSeconds()).padStart(2, "0");
-      setTime(`${h}:${m}:${s}`);
-    };
-    const tzName =
-      Intl.DateTimeFormat(undefined, { timeZoneName: "short" })
-        .formatToParts(new Date())
-        .find((p) => p.type === "timeZoneName")?.value ?? "";
-    setTz(tzName);
-    update();
-    const interval = setInterval(update, 1000);
+    const interval = setInterval(() => {
+      setTime(getClockTime());
+    }, 1000);
     return () => clearInterval(interval);
   }, []);
 

@@ -10,6 +10,12 @@ import {
   type ReactNode,
 } from "react";
 import { supabase } from "@/lib/supabase";
+import {
+  buildResetPlan,
+  getUpdatedGlobalStreak,
+  toDateStr,
+  type ResettableHabit,
+} from "@/lib/daily-reset";
 import { useAuth } from "@/context/AuthContext";
 import XPToast from "@/components/XPToast";
 import LevelUpToast from "@/components/LevelUpToast";
@@ -220,6 +226,114 @@ export function EliteProvider({ children }: { children: ReactNode }) {
 
       if (!profile || cancelled) return;
 
+      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+      // Keep the stored timezone fresh so both login recovery and cron align
+      // to the user's local day boundary.
+      await supabase
+        .from("operator_profile")
+        .update({ timezone: userTimezone })
+        .eq("id", userId);
+
+      let dailyHabitRows = (dhRes.data ?? []) as ResettableHabit[];
+      let nonNegotiableRows = (nnRes.data ?? []) as ResettableHabit[];
+      let logRows = logsRes.data ?? [];
+
+      const today = toDateStr(new Date(), userTimezone);
+
+      if (profile.last_habit_reset !== today) {
+        const resetPlan = buildResetPlan({
+          today,
+          lastHabitReset: profile.last_habit_reset,
+          xp: profile.xp,
+          nonNegotiables: nonNegotiableRows,
+          dailyHabits: dailyHabitRows,
+        });
+
+        for (const day of resetPlan.days) {
+          const { data: insertedLog } = await supabase
+            .from("daily_logs")
+            .insert({
+              user_id: userId,
+              date: day.date,
+              nn_summary: day.nnSummary,
+              habit_summary: day.habitSummary,
+              total_xp_at_time: day.xpAtTime,
+              penalty: day.penalty,
+            })
+            .select()
+            .single();
+
+          if (insertedLog) {
+            logRows = [insertedLog, ...logRows];
+          }
+        }
+
+        const updatedNonNegotiables = nonNegotiableRows.map((habit) => ({
+          ...habit,
+          completed_today: false,
+          streak: habit.completed_today ? habit.streak + 1 : 0,
+        }));
+        const updatedDailyHabits = dailyHabitRows.map((habit) => ({
+          ...habit,
+          completed_today: false,
+          streak: habit.completed_today ? habit.streak + 1 : 0,
+        }));
+
+        await Promise.all([
+          ...updatedNonNegotiables.map((habit) =>
+            supabase
+              .from("non_negotiables")
+              .update({
+                completed_today: false,
+                streak: habit.streak,
+              })
+              .eq("id", habit.id)
+          ),
+          ...updatedDailyHabits.map((habit) =>
+            supabase
+              .from("daily_habits")
+              .update({
+                completed_today: false,
+                streak: habit.streak,
+              })
+              .eq("id", habit.id)
+          ),
+        ]);
+
+        const yesterday = toDateStr(
+          new Date(Date.now() - 86_400_000),
+          userTimezone
+        );
+        const newGlobalStreak = getUpdatedGlobalStreak({
+          streak: profile.streak,
+          lastCheckIn: profile.last_check_in,
+          timezone: userTimezone,
+          today,
+          yesterday,
+        });
+
+        await supabase
+          .from("operator_profile")
+          .update({
+            xp: resetPlan.finalXp,
+            streak: newGlobalStreak,
+            last_habit_reset: today,
+            timezone: userTimezone,
+          })
+          .eq("id", userId);
+
+        profile = {
+          ...profile,
+          xp: resetPlan.finalXp,
+          streak: newGlobalStreak,
+          last_habit_reset: today,
+          timezone: userTimezone,
+        };
+        dailyHabitRows = updatedDailyHabits;
+        nonNegotiableRows = updatedNonNegotiables;
+      }
+
       // Map DB rows to local types
       const objectives: Objective[] = (objRes.data ?? []).map((r) => ({
         id: r.id,
@@ -230,36 +344,27 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         status: r.status as "Active" | "Completed",
       }));
 
-      const dailyHabits: Habit[] = (dhRes.data ?? []).map((r) => ({
+      const dailyHabits: Habit[] = dailyHabitRows.map((r) => ({
         id: r.id,
         title: r.title,
         completedToday: r.completed_today,
         streak: r.streak,
       }));
 
-      const nonNegotiables: Habit[] = (nnRes.data ?? []).map((r) => ({
+      const nonNegotiables: Habit[] = nonNegotiableRows.map((r) => ({
         id: r.id,
         title: r.title,
         completedToday: r.completed_today,
         streak: r.streak,
       }));
 
-      const logs: DailyPerformanceLog[] = (logsRes.data ?? []).map((r) => ({
+      const logs: DailyPerformanceLog[] = logRows.map((r) => ({
         date: r.date,
         nnSummary: r.nn_summary as { title: string; completed: boolean }[],
         habitSummary: r.habit_summary as { title: string; completed: boolean }[],
         totalXpAtTime: r.total_xp_at_time,
         penalty: r.penalty,
       }));
-
-      // Detect user's local timezone from browser.
-      // IMPORTANT: daily reset markers and streak are owned by the server reset job.
-      // Client should not mutate last_habit_reset, otherwise cron skips processing.
-      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
-      await supabase
-        .from("operator_profile")
-        .update({ timezone: userTimezone })
-        .eq("id", userId);
 
       const loadedState: EliteState = {
         xp: profile.xp,

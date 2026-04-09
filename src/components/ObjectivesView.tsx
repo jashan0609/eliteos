@@ -106,6 +106,7 @@ export default function ObjectivesView() {
       )}
 
       <AddObjectiveModal
+        key={`${modalOpen ? "open" : "closed"}-${editTarget?.id ?? "new"}`}
         open={modalOpen}
         onClose={closeModal}
         onAdd={addObjective}

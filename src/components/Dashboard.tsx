@@ -89,7 +89,7 @@ interface DashboardProps {
 }
 
 export default function Dashboard({ activeTab }: DashboardProps) {
-  const { objectives, dailyHabits, nonNegotiables, xp, logs } = useElite();
+  const { objectives, dailyHabits, nonNegotiables, logs } = useElite();
   const tab = TAB_CONTENT[activeTab];
   const TabIcon = tab.icon;
 

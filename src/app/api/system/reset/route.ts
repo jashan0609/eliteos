@@ -1,33 +1,12 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
+import {
+  buildResetPlan,
+  getUpdatedGlobalStreak,
+  toDateStr,
+} from "@/lib/daily-reset";
 
 export const dynamic = "force-dynamic";
-
-const PENALTY_PER_NN = 60;
-const MS_PER_DAY = 86_400_000;
-
-/** Return "YYYY-MM-DD" in a given IANA timezone (e.g. "Asia/Kolkata") */
-function toDateStr(d: Date, timezone = "UTC"): string {
-  try {
-    return new Intl.DateTimeFormat("en-CA", { timeZone: timezone })
-      .format(d)
-      .slice(0, 10);
-  } catch {
-    return d.toISOString().slice(0, 10);
-  }
-}
-
-/** Return every date string between `from` (inclusive) and `to` (exclusive) */
-function dateRange(from: string, to: string): string[] {
-  const dates: string[] = [];
-  let cursor = new Date(from + "T00:00:00Z");
-  const end = new Date(to + "T00:00:00Z");
-  while (cursor < end) {
-    dates.push(toDateStr(cursor));
-    cursor = new Date(cursor.getTime() + MS_PER_DAY);
-  }
-  return dates;
-}
 
 export async function GET(req: Request) {
   const cronSecret = process.env.CRON_SECRET;
@@ -61,7 +40,10 @@ export async function GET(req: Request) {
       const userId = profile.id;
       const userTz = profile.timezone ?? "UTC";
       const today = toDateStr(new Date(), userTz);
-      const yesterdayStr = toDateStr(new Date(Date.now() - MS_PER_DAY), userTz);
+      const yesterdayStr = toDateStr(
+        new Date(Date.now() - 86_400_000),
+        userTz
+      );
 
       // Skip if already reset today in user's timezone
       if (profile.last_habit_reset === today) continue;
@@ -75,47 +57,27 @@ export async function GET(req: Request) {
       const nns = nnRes.data ?? [];
       const dailyHabits = dhRes.data ?? [];
 
-      if (nns.length === 0 && dailyHabits.length === 0) continue;
+      const resetPlan = buildResetPlan({
+        today,
+        lastHabitReset: profile.last_habit_reset,
+        xp: profile.xp,
+        nonNegotiables: nns,
+        dailyHabits,
+      });
 
-      // ── Determine how many missed days to back-fill ──
-      const lastReset = profile.last_habit_reset || toDateStr(new Date(Date.now() - MS_PER_DAY));
-      const missedDays = dateRange(lastReset, today);
-
-      // For the FIRST missed day, use actual completed_today values.
-      // For subsequent days (cron outage catch-up), everything was already
-      // reset to false, so all NNs count as missed.
-      let runningXp = profile.xp;
-      let isFirstDay = true;
-
-      for (const day of missedDays) {
-        let penalty = 0;
-
-        const nnSummary = nns.map((h) => {
-          // On first day, use real data. On back-fill days, all are missed (false).
-          const completed = isFirstDay ? h.completed_today : false;
-          if (!completed) penalty += PENALTY_PER_NN;
-          return { title: h.title, completed };
-        });
-
-        const habitSummary = dailyHabits.map((h) => ({
-          title: h.title,
-          completed: isFirstDay ? h.completed_today : false,
-        }));
-
+      for (const [index, day] of resetPlan.days.entries()) {
         // Archive log for this day
         await supabaseAdmin.from("daily_logs").insert({
           user_id: userId,
-          date: day,
-          nn_summary: nnSummary,
-          habit_summary: habitSummary,
-          total_xp_at_time: runningXp,
-          penalty,
+          date: day.date,
+          nn_summary: day.nnSummary,
+          habit_summary: day.habitSummary,
+          total_xp_at_time: day.xpAtTime,
+          penalty: day.penalty,
         });
 
-        runningXp = Math.max(0, runningXp - penalty);
-
         // After the first day, streak updates for individual habits happen once
-        if (isFirstDay) {
+        if (index === 0) {
           for (const h of nns) {
             const newStreak = h.completed_today ? h.streak + 1 : 0;
             await supabaseAdmin
@@ -130,31 +92,22 @@ export async function GET(req: Request) {
               .update({ completed_today: false, streak: newStreak })
               .eq("id", h.id);
           }
-        } else {
-          // Back-fill days: streaks already 0, just ensure completed_today stays false
-          // (already reset on first day — no DB call needed)
         }
-
-        isFirstDay = false;
       }
 
-      // ── Global streak: if user didn't check in yesterday, reset to 0 ──
-      const lastCheckInDay = profile.last_check_in
-        ? profile.last_check_in.slice(0, 10)
-        : null;
-      let newGlobalStreak = profile.streak;
-
-      if (lastCheckInDay === yesterdayStr) {
-        newGlobalStreak = profile.streak + 1;
-      } else if (lastCheckInDay !== today) {
-        newGlobalStreak = lastCheckInDay ? 0 : profile.streak;
-      }
+      const newGlobalStreak = getUpdatedGlobalStreak({
+        streak: profile.streak,
+        lastCheckIn: profile.last_check_in,
+        timezone: userTz,
+        today,
+        yesterday: yesterdayStr,
+      });
 
       // ── Final profile update ──
       await supabaseAdmin
         .from("operator_profile")
         .update({
-          xp: runningXp,
+          xp: resetPlan.finalXp,
           streak: newGlobalStreak,
           last_habit_reset: today,
         })
