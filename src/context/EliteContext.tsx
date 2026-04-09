@@ -181,13 +181,22 @@ export function EliteProvider({ children }: { children: ReactNode }) {
 
   // ── Fetch all data from Supabase on login ──
   useEffect(() => {
+    let cancelled = false;
+
     if (!user) {
-      setState(DEFAULT_STATE);
-      setLoading(false);
-      return;
+      queueMicrotask(() => {
+        if (cancelled) return;
+        setState(DEFAULT_STATE);
+        setLoading(false);
+      });
+      return () => {
+        cancelled = true;
+      };
     }
 
-    let cancelled = false;
+    queueMicrotask(() => {
+      if (!cancelled) setLoading(true);
+    });
 
     async function fetchSystemState() {
       const userId = user!.id;

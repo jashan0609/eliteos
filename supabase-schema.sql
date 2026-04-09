@@ -64,6 +64,11 @@ grant select, insert, update, delete on objectives to authenticated;
 grant select, insert, update, delete on daily_habits to authenticated;
 grant select, insert, update, delete on non_negotiables to authenticated;
 grant select, insert, update, delete on daily_logs to authenticated;
+grant select, insert, update, delete on operator_profile to service_role;
+grant select, insert, update, delete on objectives to service_role;
+grant select, insert, update, delete on daily_habits to service_role;
+grant select, insert, update, delete on non_negotiables to service_role;
+grant select, insert, update, delete on daily_logs to service_role;
 
 grant select on operator_profile to anon;
 grant select on objectives to anon;

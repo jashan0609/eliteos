@@ -8,6 +8,33 @@ import {
 
 export const dynamic = "force-dynamic";
 
+function formatError(err: unknown) {
+  if (err instanceof Error) {
+    return err.message;
+  }
+
+  if (err && typeof err === "object") {
+    const parts = ["message", "details", "hint", "code"]
+      .map((key) => {
+        const value = Reflect.get(err, key);
+        return value ? `${key}=${String(value)}` : null;
+      })
+      .filter(Boolean);
+
+    if (parts.length > 0) {
+      return parts.join(" | ");
+    }
+  }
+
+  return String(err);
+}
+
+function throwIfError(error: unknown, context: string) {
+  if (error) {
+    throw new Error(`${context}: ${formatError(error)}`);
+  }
+}
+
 export async function GET(req: Request) {
   const cronSecret = process.env.CRON_SECRET;
   if (!cronSecret) {
@@ -29,7 +56,7 @@ export async function GET(req: Request) {
       .from("operator_profile")
       .select("*");
 
-    if (profileErr) throw profileErr;
+    throwIfError(profileErr, "Failed to load operator profiles");
     if (!profiles || profiles.length === 0) {
       return NextResponse.json({ message: "All operators current.", processed: 0 });
     }
@@ -53,6 +80,8 @@ export async function GET(req: Request) {
         supabaseAdmin.from("non_negotiables").select("*").eq("user_id", userId),
         supabaseAdmin.from("daily_habits").select("*").eq("user_id", userId),
       ]);
+      throwIfError(nnRes.error, `Failed to load non-negotiables for ${userId}`);
+      throwIfError(dhRes.error, `Failed to load daily habits for ${userId}`);
 
       const nns = nnRes.data ?? [];
       const dailyHabits = dhRes.data ?? [];
@@ -67,7 +96,7 @@ export async function GET(req: Request) {
 
       for (const [index, day] of resetPlan.days.entries()) {
         // Archive log for this day
-        await supabaseAdmin.from("daily_logs").insert({
+        const { error: logErr } = await supabaseAdmin.from("daily_logs").insert({
           user_id: userId,
           date: day.date,
           nn_summary: day.nnSummary,
@@ -75,22 +104,34 @@ export async function GET(req: Request) {
           total_xp_at_time: day.xpAtTime,
           penalty: day.penalty,
         });
+        throwIfError(
+          logErr,
+          `Failed to archive daily log for ${userId} on ${day.date}`
+        );
 
         // After the first day, streak updates for individual habits happen once
         if (index === 0) {
           for (const h of nns) {
             const newStreak = h.completed_today ? h.streak + 1 : 0;
-            await supabaseAdmin
+            const { error } = await supabaseAdmin
               .from("non_negotiables")
               .update({ completed_today: false, streak: newStreak })
               .eq("id", h.id);
+            throwIfError(
+              error,
+              `Failed to reset non-negotiable ${h.id} for ${userId}`
+            );
           }
           for (const h of dailyHabits) {
             const newStreak = h.completed_today ? h.streak + 1 : 0;
-            await supabaseAdmin
+            const { error } = await supabaseAdmin
               .from("daily_habits")
               .update({ completed_today: false, streak: newStreak })
               .eq("id", h.id);
+            throwIfError(
+              error,
+              `Failed to reset daily habit ${h.id} for ${userId}`
+            );
           }
         }
       }
@@ -104,7 +145,7 @@ export async function GET(req: Request) {
       });
 
       // ── Final profile update ──
-      await supabaseAdmin
+      const { error: profileUpdateErr } = await supabaseAdmin
         .from("operator_profile")
         .update({
           xp: resetPlan.finalXp,
@@ -112,6 +153,7 @@ export async function GET(req: Request) {
           last_habit_reset: today,
         })
         .eq("id", userId);
+      throwIfError(profileUpdateErr, `Failed to update profile for ${userId}`);
 
       processedCount++;
     }
@@ -122,7 +164,7 @@ export async function GET(req: Request) {
       date: toDateStr(new Date()),
     });
   } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+    const msg = formatError(err);
     console.error(`[DAILY_RESET_FAILURE] ${msg}`);
     return NextResponse.json({ error: msg }, { status: 500 });
   }

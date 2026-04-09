@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, Star, Rocket } from "lucide-react";
 import type { Objective } from "@/context/EliteContext";
@@ -21,19 +21,12 @@ export default function AddObjectiveModal({
   onEdit,
 }: AddObjectiveModalProps) {
   const isEditing = !!editData;
-  const [type, setType] = useState<"north-star" | "sprint">("sprint");
-  const [title, setTitle] = useState("");
-  const [description, setDescription] = useState("");
+  const [type, setType] = useState<"north-star" | "sprint">(
+    editData?.type ?? "sprint"
+  );
+  const [title, setTitle] = useState(editData?.title ?? "");
+  const [description, setDescription] = useState(editData?.description ?? "");
   const descriptionRef = useRef<HTMLTextAreaElement>(null);
-
-  // Sync form fields whenever the modal opens
-  useEffect(() => {
-    if (open) {
-      setType(editData?.type ?? "sprint");
-      setTitle(editData?.title ?? "");
-      setDescription(editData?.description ?? "");
-    }
-  }, [open, editData]);
 
   const handleSubmit = () => {
     if (!title.trim()) return;
