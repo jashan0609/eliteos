@@ -9,7 +9,6 @@ import {
   CheckCircle,
   ShieldAlert,
   BookOpen,
-  Skull,
 } from "lucide-react";
 import {
   ResponsiveContainer,
@@ -104,12 +103,6 @@ export default function Dashboard({ activeTab }: DashboardProps) {
       return { day: dayNames[d.getDay()], xp: log.totalXpAtTime };
     });
   }, [logs]);
-
-  // Total wasted XP from penalties across all logs
-  const totalWasted = useMemo(
-    () => logs.reduce((sum, log) => sum + log.penalty, 0),
-    [logs]
-  );
 
   // Derive stats
   const completedObjectives = objectives.filter(
@@ -215,7 +208,7 @@ export default function Dashboard({ activeTab }: DashboardProps) {
                 <p className="text-[10px] text-muted font-semibold uppercase tracking-wider mb-3">
                   Activity
                 </p>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   {/* Goal Progress */}
                   <motion.div
                     initial={{ opacity: 0, y: 16 }}
@@ -337,35 +330,6 @@ export default function Dashboard({ activeTab }: DashboardProps) {
                       {totalDaily === 0
                         ? "No daily habits tracked yet"
                         : `${totalDaily - completedDaily} remaining`}
-                    </p>
-                  </motion.div>
-                  {/* Wasted Potential */}
-                  <motion.div
-                    initial={{ opacity: 0, y: 16 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: 0.26, duration: 0.35 }}
-                    className="glass glass-hover p-4 md:p-5 border border-pink/10"
-                  >
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="p-2 rounded-xl bg-pink/10">
-                        <Skull
-                          size={18}
-                          strokeWidth={1.5}
-                          className="text-pink"
-                        />
-                      </div>
-                      <span className="text-[11px] font-semibold text-pink">
-                        {totalWasted > 0 ? "Losses" : "Clean"}
-                      </span>
-                    </div>
-                    <h3 className="text-sm font-semibold text-text mb-1">
-                      Wasted Potential
-                    </h3>
-                    <p className="text-xl font-bold text-pink tabular-nums font-mono">
-                      {totalWasted > 0 ? `-${totalWasted.toLocaleString()} XP` : "0 XP"}
-                    </p>
-                    <p className="text-[9px] text-dim mt-2 font-mono tracking-wider">
-                      STATUS: AUTHORITATIVE_LOSS_SYNCED
                     </p>
                   </motion.div>
                 </div>
