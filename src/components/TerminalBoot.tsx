@@ -5,11 +5,11 @@ import { motion, AnimatePresence } from "framer-motion";
 
 const BOOT_STEPS = [
   { text: "Initializing EliteOS", delay: 0 },
-  { text: "Loading personal protocols", delay: 400 },
-  { text: "Syncing objectives", delay: 800 },
-  { text: "Mapping your arena", delay: 1200 },
-  { text: "Calibrating focus engine", delay: 1600 },
-  { text: "Ready", delay: 2000 },
+  { text: "Loading personal protocols", delay: 100 },
+  { text: "Syncing objectives", delay: 200 },
+  { text: "Mapping your arena", delay: 300 },
+  { text: "Calibrating focus engine", delay: 400 },
+  { text: "Ready", delay: 500 },
 ];
 
 interface TerminalBootProps {
@@ -39,7 +39,7 @@ export default function TerminalBoot({ onBootComplete }: TerminalBootProps) {
     const finalTimer = setTimeout(() => {
       setPhase("done");
       setTimeout(onBootComplete, 300);
-    }, 2600);
+    }, 700);
     timers.push(finalTimer);
 
     return () => timers.forEach(clearTimeout);
