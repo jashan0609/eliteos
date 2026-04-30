@@ -12,7 +12,7 @@ const NAV_ITEMS: {
 }[] = [
   { id: "dashboard", label: "Dashboard", mobileLabel: "Home", icon: Home },
   { id: "objectives", label: "Objectives", mobileLabel: "Goals", icon: Target },
-  { id: "ghost", label: "The Ghost", mobileLabel: "Ghost", icon: Ghost },
+  { id: "ghost", label: "Arena", mobileLabel: "Arena", icon: Ghost },
   { id: "habits", label: "Habits", mobileLabel: "Habits", icon: CheckCircle },
   { id: "logs", label: "System Logs", mobileLabel: "Logs", icon: BookOpen },
 ];

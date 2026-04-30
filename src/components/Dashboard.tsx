@@ -46,6 +46,7 @@ import { useElite } from "@/context/EliteContext";
 import ObjectivesView from "./ObjectivesView";
 import HabitsView from "./HabitsView";
 import LogsView from "./LogsView";
+import GhostView from "./GhostView";
 
 const TAB_CONTENT: Record<
   TabId,
@@ -65,7 +66,7 @@ const TAB_CONTENT: Record<
   },
   ghost: {
     title: "The Arena",
-    subtitle: "See how you stack up — rival heatmaps and benchmarks",
+    subtitle: "Compete with friends on a rolling 7-day discipline leaderboard",
     icon: Ghost,
     accent: "text-pink",
   },
@@ -385,27 +386,7 @@ export default function Dashboard({ activeTab }: DashboardProps) {
           {activeTab === "logs" && <LogsView />}
 
           {/* ═══ GHOST TAB — EMPTY STATE ═══ */}
-          {activeTab === "ghost" && (
-            <motion.div
-              initial={{ opacity: 0, scale: 0.98 }}
-              animate={{ opacity: 1, scale: 1 }}
-              transition={{ delay: 0.1, duration: 0.3 }}
-              className="glass p-8 md:p-12 flex flex-col items-center justify-center text-center"
-            >
-              <div className="w-16 h-16 rounded-2xl bg-card-border/30 flex items-center justify-center mb-5">
-                <Ghost size={28} strokeWidth={1.5} className="text-pink" />
-              </div>
-              <h3 className="text-base font-semibold text-text mb-2">
-                The Arena
-              </h3>
-              <p className="text-sm text-muted max-w-xs mb-4">
-                {tab.subtitle}
-              </p>
-              <div className="px-5 py-2.5 rounded-xl border border-card-border text-xs text-dim">
-                Coming soon
-              </div>
-            </motion.div>
-          )}
+          {activeTab === "ghost" && <GhostView />}
         </motion.div>
       </AnimatePresence>
     </div>

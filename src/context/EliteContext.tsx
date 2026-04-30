@@ -51,11 +51,34 @@ interface EliteState {
   streak: number;
   lastCheckIn: string | null;
   lastHabitReset: string | null;
+  username: string;
   initializedAt: string;
   objectives: Objective[];
   dailyHabits: Habit[];
   nonNegotiables: Habit[];
   logs: DailyPerformanceLog[];
+  friendsInbound: FriendRequestItem[];
+  friendsOutbound: FriendRequestItem[];
+  leaderboard: ArenaLeaderboardItem[];
+  friendCount: number;
+}
+
+interface FriendRequestItem {
+  id: string;
+  userId: string;
+  username: string;
+  createdAt: string;
+}
+
+interface ArenaLeaderboardItem {
+  rank: number;
+  userId: string;
+  username: string;
+  xp: number;
+  streak: number;
+  score: number | null;
+  hasEnoughData: boolean;
+  isSelf: boolean;
 }
 
 // ── Leveling System ──
@@ -96,6 +119,7 @@ export function getLevelData(xp: number): LevelData {
 
 interface EliteContextValue extends EliteState {
   loading: boolean;
+  arenaLoading: boolean;
   levelData: LevelData;
   updateXP: (amount: number) => void;
   addObjective: (obj: Omit<Objective, "id" | "progress" | "status">) => void;
@@ -110,6 +134,14 @@ interface EliteContextValue extends EliteState {
   deleteNonNegotiable: (id: string) => void;
   toggleDailyHabit: (id: string) => void;
   toggleNonNegotiable: (id: string) => void;
+  setUsername: (username: string) => Promise<string | null>;
+  sendFriendRequest: (username: string) => Promise<string | null>;
+  respondToFriendRequest: (
+    requestId: string,
+    action: "accept" | "decline"
+  ) => Promise<string | null>;
+  removeFriend: (friendUserId: string) => Promise<string | null>;
+  refreshFriendsArena: () => Promise<void>;
   showToast: (type: "gain" | "loss", amount: number, message: string) => void;
 }
 
@@ -118,11 +150,16 @@ const DEFAULT_STATE: EliteState = {
   streak: 0,
   lastCheckIn: null,
   lastHabitReset: null,
+  username: "",
   initializedAt: new Date().toISOString(),
   objectives: [],
   dailyHabits: [],
   nonNegotiables: [],
   logs: [],
+  friendsInbound: [],
+  friendsOutbound: [],
+  leaderboard: [],
+  friendCount: 0,
 };
 
 // ── Context ──
@@ -156,9 +193,10 @@ async function patchProfile(
 // ── Provider ──
 
 export function EliteProvider({ children }: { children: ReactNode }) {
-  const { user } = useAuth();
+  const { user, session } = useAuth();
   const [state, setState] = useState<EliteState>(DEFAULT_STATE);
   const [loading, setLoading] = useState(true);
+  const [arenaLoading, setArenaLoading] = useState(false);
 
   // Prevents rapid-fire toggles from creating race conditions
   const pendingToggles = useRef<Set<string>>(new Set());
@@ -380,11 +418,16 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         streak: profile.streak,
         lastCheckIn: profile.last_check_in,
         lastHabitReset: profile.last_habit_reset,
+        username: profile.username ?? "",
         initializedAt: profile.initialized_at,
         objectives,
         dailyHabits,
         nonNegotiables,
         logs,
+        friendsInbound: [],
+        friendsOutbound: [],
+        leaderboard: [],
+        friendCount: 0,
       };
 
       if (!cancelled) {
@@ -397,6 +440,71 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, [user]);
 
+  const authedJson = useCallback(
+    async (path: string, init?: RequestInit) => {
+      if (!session?.access_token) throw new Error("Not authenticated");
+      const res = await fetch(path, {
+        ...init,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${session.access_token}`,
+          ...(init?.headers ?? {}),
+        },
+      });
+      const data = await res.json();
+      if (!res.ok || data?.error) {
+        throw new Error(data?.error ?? "Request failed");
+      }
+      return data;
+    },
+    [session?.access_token]
+  );
+
+  const refreshFriendsArena = useCallback(async () => {
+    if (!user || !session?.access_token) {
+      setState((prev) => ({
+        ...prev,
+        friendsInbound: [],
+        friendsOutbound: [],
+        leaderboard: [],
+        friendCount: 0,
+      }));
+      return;
+    }
+
+    setArenaLoading(true);
+
+    try {
+      const [requestsData, leaderboardData] = await Promise.all([
+        authedJson("/api/friends/requests"),
+        authedJson("/api/friends/leaderboard"),
+      ]);
+      setState((prev) => ({
+        ...prev,
+        friendsInbound: requestsData.inbound ?? [],
+        friendsOutbound: requestsData.outbound ?? [],
+        leaderboard: leaderboardData.leaderboard ?? [],
+        friendCount: leaderboardData.friendCount ?? 0,
+      }));
+    } catch (error) {
+      console.error("[FRIENDS_ARENA_CLIENT_FAILURE]", error);
+      setState((prev) => ({
+        ...prev,
+        friendsInbound: [],
+        friendsOutbound: [],
+        leaderboard: [],
+        friendCount: 0,
+      }));
+    } finally {
+      setArenaLoading(false);
+    }
+  }, [authedJson, session?.access_token, user]);
+
+  useEffect(() => {
+    if (!user || loading) return;
+    refreshFriendsArena();
+  }, [loading, refreshFriendsArena, state.logs.length, state.streak, user]);
+
   const showToast = useCallback(
     (type: "gain" | "loss", amount: number, message: string) => {
       setToast({ show: true, type, amount, message });
@@ -404,6 +512,66 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     },
     []
   );
+
+  const setUsername = useCallback(async (username: string) => {
+    if (!user) return "Not authenticated";
+    const normalized = username.trim().toLowerCase();
+    if (!normalized) return "Username is required";
+    if (!/^[a-z0-9_]{3,24}$/.test(normalized)) {
+      return "Use 3-24 chars: lowercase letters, numbers, underscore";
+    }
+
+    const { error } = await supabase
+      .from("operator_profile")
+      .update({ username: normalized })
+      .eq("id", user.id);
+    if (error) return error.message;
+
+    setState((prev) => ({ ...prev, username: normalized }));
+    return null;
+  }, [user]);
+
+  const sendFriendRequest = useCallback(async (username: string) => {
+    try {
+      await authedJson("/api/friends/request", {
+        method: "POST",
+        body: JSON.stringify({ username }),
+      });
+      await refreshFriendsArena();
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Failed to send request";
+    }
+  }, [authedJson, refreshFriendsArena]);
+
+  const respondToFriendRequest = useCallback(
+    async (requestId: string, action: "accept" | "decline") => {
+      try {
+        await authedJson("/api/friends/respond", {
+          method: "POST",
+          body: JSON.stringify({ requestId, action }),
+        });
+        await refreshFriendsArena();
+        return null;
+      } catch (error) {
+        return error instanceof Error ? error.message : "Failed to respond";
+      }
+    },
+    [authedJson, refreshFriendsArena]
+  );
+
+  const removeFriend = useCallback(async (friendUserId: string) => {
+    try {
+      await authedJson("/api/friends/remove", {
+        method: "POST",
+        body: JSON.stringify({ friendUserId }),
+      });
+      await refreshFriendsArena();
+      return null;
+    } catch (error) {
+      return error instanceof Error ? error.message : "Failed to remove friend";
+    }
+  }, [authedJson, refreshFriendsArena]);
 
   // ── XP ──
 
@@ -793,6 +961,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
   const value: EliteContextValue = {
     ...state,
     loading,
+    arenaLoading,
     levelData,
     updateXP,
     addObjective,
@@ -807,6 +976,11 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     deleteNonNegotiable,
     toggleDailyHabit,
     toggleNonNegotiable,
+    setUsername,
+    sendFriendRequest,
+    respondToFriendRequest,
+    removeFriend,
+    refreshFriendsArena,
     showToast,
   };
 
