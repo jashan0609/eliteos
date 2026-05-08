@@ -8,6 +8,7 @@ import {
   Ghost,
   CheckCircle,
   ShieldAlert,
+  UserCircle2,
   BookOpen,
 } from "lucide-react";
 import {
@@ -47,6 +48,7 @@ import ObjectivesView from "./ObjectivesView";
 import HabitsView from "./HabitsView";
 import LogsView from "./LogsView";
 import GhostView from "./GhostView";
+import ProfileView from "./ProfileView";
 
 const TAB_CONTENT: Record<
   TabId,
@@ -81,6 +83,12 @@ const TAB_CONTENT: Record<
     subtitle: "Daily performance archive and history",
     icon: BookOpen,
     accent: "text-muted",
+  },
+  profile: {
+    title: "Profile",
+    subtitle: "Manage username and view account details",
+    icon: UserCircle2,
+    accent: "text-cyan",
   },
 };
 
@@ -387,6 +395,9 @@ export default function Dashboard({ activeTab }: DashboardProps) {
 
           {/* ═══ GHOST TAB — EMPTY STATE ═══ */}
           {activeTab === "ghost" && <GhostView />}
+
+          {/* ═══ PROFILE TAB ═══ */}
+          {activeTab === "profile" && <ProfileView />}
         </motion.div>
       </AnimatePresence>
     </div>

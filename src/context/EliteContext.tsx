@@ -52,6 +52,7 @@ interface EliteState {
   lastCheckIn: string | null;
   lastHabitReset: string | null;
   username: string;
+  timezone: string;
   initializedAt: string;
   objectives: Objective[];
   dailyHabits: Habit[];
@@ -134,7 +135,7 @@ interface EliteContextValue extends EliteState {
   deleteNonNegotiable: (id: string) => void;
   toggleDailyHabit: (id: string) => void;
   toggleNonNegotiable: (id: string) => void;
-  setUsername: (username: string) => Promise<string | null>;
+  updateUsername: (username: string) => Promise<string | null>;
   sendFriendRequest: (username: string) => Promise<string | null>;
   respondToFriendRequest: (
     requestId: string,
@@ -151,6 +152,7 @@ const DEFAULT_STATE: EliteState = {
   lastCheckIn: null,
   lastHabitReset: null,
   username: "",
+  timezone: "UTC",
   initializedAt: new Date().toISOString(),
   objectives: [],
   dailyHabits: [],
@@ -239,11 +241,6 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     async function fetchSystemState() {
       const userId = user!.id;
 
-      // Debug: verify auth session is attached
-      const { data: sessionData } = await supabase.auth.getSession();
-      console.log("[ELITE_DEBUG] session:", sessionData.session ? "VALID" : "NULL");
-      console.log("[ELITE_DEBUG] user_id:", userId);
-
       // Fetch all tables in parallel
       const [profileRes, objRes, dhRes, nnRes, logsRes] = await Promise.all([
         supabase.from("operator_profile").select("*").eq("id", userId).single(),
@@ -255,17 +252,16 @@ export function EliteProvider({ children }: { children: ReactNode }) {
 
       if (cancelled) return;
 
-      // Debug: log any errors
-      console.log("[ELITE_DEBUG] profile:", profileRes.error?.message ?? "OK");
-      console.log("[ELITE_DEBUG] objectives:", objRes.error?.message ?? "OK");
-      console.log("[ELITE_DEBUG] habits:", dhRes.error?.message ?? "OK");
-
       // If no profile yet, create one (first login)
       let profile = profileRes.data;
       if (!profile) {
+        const signupUsername =
+          typeof user?.user_metadata?.username === "string"
+            ? user.user_metadata.username.toLowerCase()
+            : null;
         const { data: newProfile } = await supabase
           .from("operator_profile")
-          .insert({ id: userId })
+          .insert({ id: userId, ...(signupUsername ? { username: signupUsername } : {}) })
           .select()
           .single();
         profile = newProfile;
@@ -275,12 +271,15 @@ export function EliteProvider({ children }: { children: ReactNode }) {
 
       const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
-      // Keep the stored timezone fresh so both login recovery and cron align
-      // to the user's local day boundary.
-      await supabase
-        .from("operator_profile")
-        .update({ timezone: userTimezone })
-        .eq("id", userId);
+      if (profile.timezone !== userTimezone) {
+        // Keep timezone fresh so both login recovery and cron align
+        // to the user's local day boundary.
+        await supabase
+          .from("operator_profile")
+          .update({ timezone: userTimezone })
+          .eq("id", userId);
+        profile = { ...profile, timezone: userTimezone };
+      }
 
       let dailyHabitRows = (dhRes.data ?? []) as ResettableHabit[];
       let nonNegotiableRows = (nnRes.data ?? []) as ResettableHabit[];
@@ -419,6 +418,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         lastCheckIn: profile.last_check_in,
         lastHabitReset: profile.last_habit_reset,
         username: profile.username ?? "",
+        timezone: profile.timezone ?? "UTC",
         initializedAt: profile.initialized_at,
         objectives,
         dailyHabits,
@@ -460,7 +460,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     [session?.access_token]
   );
 
-  const refreshFriendsArena = useCallback(async () => {
+  const refreshFriendsArena = useCallback(async (silent = false) => {
     if (!user || !session?.access_token) {
       setState((prev) => ({
         ...prev,
@@ -472,7 +472,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    setArenaLoading(true);
+    if (!silent) setArenaLoading(true);
 
     try {
       const [requestsData, leaderboardData] = await Promise.all([
@@ -496,7 +496,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         friendCount: 0,
       }));
     } finally {
-      setArenaLoading(false);
+      if (!silent) setArenaLoading(false);
     }
   }, [authedJson, session?.access_token, user]);
 
@@ -513,23 +513,31 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     []
   );
 
-  const setUsername = useCallback(async (username: string) => {
-    if (!user) return "Not authenticated";
-    const normalized = username.trim().toLowerCase();
-    if (!normalized) return "Username is required";
-    if (!/^[a-z0-9_]{3,24}$/.test(normalized)) {
-      return "Use 3-24 chars: lowercase letters, numbers, underscore";
-    }
+  const updateUsername = useCallback(
+    async (username: string) => {
+      if (!user) return "Not authenticated";
+      const normalized = username.trim().toLowerCase();
+      if (!/^[a-z0-9_]{3,24}$/.test(normalized)) {
+        return "Username must be 3-24 chars: lowercase letters, numbers, underscore.";
+      }
 
-    const { error } = await supabase
-      .from("operator_profile")
-      .update({ username: normalized })
-      .eq("id", user.id);
-    if (error) return error.message;
+      const { error } = await supabase
+        .from("operator_profile")
+        .update({ username: normalized })
+        .eq("id", user.id);
 
-    setState((prev) => ({ ...prev, username: normalized }));
-    return null;
-  }, [user]);
+      if (error) {
+        if (error.code === "23505") {
+          return "That username is already taken.";
+        }
+        return error.message;
+      }
+
+      setState((prev) => ({ ...prev, username: normalized }));
+      return null;
+    },
+    [user]
+  );
 
   const sendFriendRequest = useCallback(async (username: string) => {
     try {
@@ -537,7 +545,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         method: "POST",
         body: JSON.stringify({ username }),
       });
-      await refreshFriendsArena();
+      void refreshFriendsArena(true);
       return null;
     } catch (error) {
       return error instanceof Error ? error.message : "Failed to send request";
@@ -551,7 +559,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
           method: "POST",
           body: JSON.stringify({ requestId, action }),
         });
-        await refreshFriendsArena();
+        void refreshFriendsArena(true);
         return null;
       } catch (error) {
         return error instanceof Error ? error.message : "Failed to respond";
@@ -566,7 +574,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         method: "POST",
         body: JSON.stringify({ friendUserId }),
       });
-      await refreshFriendsArena();
+      void refreshFriendsArena(true);
       return null;
     } catch (error) {
       return error instanceof Error ? error.message : "Failed to remove friend";
@@ -976,7 +984,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     deleteNonNegotiable,
     toggleDailyHabit,
     toggleNonNegotiable,
-    setUsername,
+    updateUsername,
     sendFriendRequest,
     respondToFriendRequest,
     removeFriend,

@@ -1,9 +1,51 @@
 alter table operator_profile
   add column if not exists username text;
 
+create or replace function public.normalize_username_base(input text)
+returns text
+language sql
+immutable
+as $$
+  select left(
+    trim(both '_' from regexp_replace(lower(coalesce(input, 'operator')), '[^a-z0-9_]+', '_', 'g')),
+    20
+  )
+$$;
+
+with base as (
+  select
+    op.id,
+    coalesce(nullif(public.normalize_username_base(split_part(au.email, '@', 1)), ''), 'operator') as base_username
+  from operator_profile op
+  join auth.users au on au.id = op.id
+  where op.username is null
+),
+ranked as (
+  select
+    id,
+    base_username,
+    row_number() over (partition by base_username order by id) as rn
+  from base
+),
+resolved as (
+  select
+    id,
+    case
+      when rn = 1 then base_username
+      else left(base_username, greatest(1, 24 - length('_' || rn::text))) || '_' || rn::text
+    end as candidate
+  from ranked
+)
+update operator_profile op
+set username = resolved.candidate
+from resolved
+where op.id = resolved.id and op.username is null;
+
 create unique index if not exists operator_profile_username_lower_unique
-  on operator_profile ((lower(username)))
-  where username is not null;
+  on operator_profile ((lower(username)));
+
+alter table operator_profile
+  alter column username set not null;
 
 create table if not exists friend_requests (
   id uuid primary key default gen_random_uuid(),

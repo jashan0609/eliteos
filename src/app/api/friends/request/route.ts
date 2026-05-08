@@ -31,7 +31,7 @@ export async function POST(req: Request) {
 
     if (senderProfileRes.error) throw new Error(formatError(senderProfileRes.error));
     if (!senderProfileRes.data?.username) {
-      return NextResponse.json({ error: "Set your username first" }, { status: 400 });
+      return NextResponse.json({ error: "Username is required on your account" }, { status: 400 });
     }
     if (receiverProfileRes.error) throw new Error(formatError(receiverProfileRes.error));
     if (!receiverProfileRes.data) {

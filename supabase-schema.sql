@@ -5,7 +5,7 @@
 -- 1. Operator profile (one row per user)
 create table if not exists operator_profile (
   id uuid primary key references auth.users(id) on delete cascade,
-  username text unique,
+  username text not null unique,
   xp integer not null default 0,
   streak integer not null default 0,
   last_check_in timestamptz,
@@ -83,8 +83,7 @@ create table if not exists friendships (
 );
 
 create unique index if not exists operator_profile_username_lower_unique
-  on operator_profile ((lower(username)))
-  where username is not null;
+  on operator_profile ((lower(username)));
 create unique index if not exists friend_requests_pending_pair_unique
   on friend_requests (least(sender_id, receiver_id), greatest(sender_id, receiver_id))
   where status = 'pending';

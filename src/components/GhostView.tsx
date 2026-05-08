@@ -2,13 +2,11 @@
 
 import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
-import { Swords, UserPlus, UserRound, Users } from "lucide-react";
+import { Swords, UserPlus, Users } from "lucide-react";
 import { useElite } from "@/context/EliteContext";
 
 export default function GhostView() {
   const {
-    username,
-    setUsername,
     sendFriendRequest,
     respondToFriendRequest,
     removeFriend,
@@ -18,29 +16,25 @@ export default function GhostView() {
     friendCount,
     arenaLoading,
   } = useElite();
-  const [usernameInput, setUsernameInput] = useState(username);
   const [friendInput, setFriendInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const friendsOnBoard = useMemo(
     () => leaderboard.filter((entry) => !entry.isSelf),
     [leaderboard]
   );
 
-  async function handleUsernameSave() {
-    setError(null);
-    const err = await setUsername(usernameInput);
-    if (err) setError(err);
-  }
-
   async function handleFriendRequest() {
     setError(null);
+    setNotice(null);
     const err = await sendFriendRequest(friendInput);
     if (err) {
       setError(err);
       return;
     }
     setFriendInput("");
+    setNotice("Friend request sent.");
   }
 
   return (
@@ -69,29 +63,6 @@ export default function GhostView() {
 
       <div className="glass p-5 border border-card-border space-y-3">
         <div className="flex items-center gap-2">
-          <UserRound size={14} className="text-violet" />
-          <p className="text-xs uppercase tracking-wider text-muted font-semibold">
-            Your Username
-          </p>
-        </div>
-        <div className="flex gap-2">
-          <input
-            value={usernameInput}
-            onChange={(e) => setUsernameInput(e.target.value)}
-            placeholder="your_handle"
-            className="flex-1 bg-black/30 border border-card-border rounded-lg px-3 py-2 text-sm outline-none focus:border-cyan"
-          />
-          <button
-            onClick={handleUsernameSave}
-            className="px-3 py-2 rounded-lg text-xs font-semibold bg-cyan/15 text-cyan hover:bg-cyan/25"
-          >
-            SAVE
-          </button>
-        </div>
-      </div>
-
-      <div className="glass p-5 border border-card-border space-y-3">
-        <div className="flex items-center gap-2">
           <UserPlus size={14} className="text-pink" />
           <p className="text-xs uppercase tracking-wider text-muted font-semibold">
             Add Friend
@@ -112,6 +83,7 @@ export default function GhostView() {
           </button>
         </div>
         {error && <p className="text-xs text-pink">{error}</p>}
+        {notice && <p className="text-xs text-cyan">{notice}</p>}
       </div>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -131,13 +103,27 @@ export default function GhostView() {
                 <span className="text-sm text-text">{request.username}</span>
                 <div className="flex gap-2">
                   <button
-                    onClick={() => respondToFriendRequest(request.id, "accept")}
+                    onClick={async () => {
+                      if (!confirm(`Accept friend request from ${request.username}?`)) return;
+                      setError(null);
+                      setNotice(null);
+                      const err = await respondToFriendRequest(request.id, "accept");
+                      if (err) setError(err);
+                      else setNotice(`You are now friends with ${request.username}.`);
+                    }}
                     className="text-[10px] px-2 py-1 rounded bg-cyan/15 text-cyan"
                   >
                     ACCEPT
                   </button>
                   <button
-                    onClick={() => respondToFriendRequest(request.id, "decline")}
+                    onClick={async () => {
+                      if (!confirm(`Decline friend request from ${request.username}?`)) return;
+                      setError(null);
+                      setNotice(null);
+                      const err = await respondToFriendRequest(request.id, "decline");
+                      if (err) setError(err);
+                      else setNotice(`Declined request from ${request.username}.`);
+                    }}
                     className="text-[10px] px-2 py-1 rounded bg-card-border text-muted"
                   >
                     DECLINE
@@ -161,7 +147,19 @@ export default function GhostView() {
                 className="flex items-center justify-between bg-black/20 border border-card-border rounded-lg px-3 py-2"
               >
                 <span className="text-sm text-text">{request.username}</span>
-                <span className="text-[10px] text-dim">PENDING</span>
+                <button
+                  onClick={async () => {
+                    if (!confirm(`Cancel request to ${request.username}?`)) return;
+                    setError(null);
+                    setNotice(null);
+                    const err = await removeFriend(request.userId);
+                    if (err) setError(err);
+                    else setNotice(`Canceled request to ${request.username}.`);
+                  }}
+                  className="text-[10px] px-2 py-1 rounded bg-card-border text-muted"
+                >
+                  CANCEL
+                </button>
               </div>
             ))}
           </div>
@@ -178,7 +176,7 @@ export default function GhostView() {
         <div className="space-y-2">
           {leaderboard.length === 0 && (
             <p className="text-xs text-dim">
-              No leaderboard entries yet. Set username and add friends to start.
+              No leaderboard entries yet. Add friends to start competing.
             </p>
           )}
           {leaderboard.map((entry) => (
@@ -203,7 +201,14 @@ export default function GhostView() {
             {friendsOnBoard.map((friend) => (
               <button
                 key={`remove-${friend.userId}`}
-                onClick={() => removeFriend(friend.userId)}
+                onClick={async () => {
+                  if (!confirm(`Remove ${friend.username} from your friends list?`)) return;
+                  setError(null);
+                  setNotice(null);
+                  const err = await removeFriend(friend.userId);
+                  if (err) setError(err);
+                  else setNotice(`${friend.username} removed from friends.`);
+                }}
                 className="text-[10px] px-2 py-1 rounded bg-pink/10 text-pink"
               >
                 UNFRIEND {friend.username}

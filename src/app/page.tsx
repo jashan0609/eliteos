@@ -10,7 +10,13 @@ import Sidebar from "@/components/Sidebar";
 import Header from "@/components/Header";
 import Dashboard from "@/components/Dashboard";
 
-export type TabId = "dashboard" | "objectives" | "ghost" | "habits" | "logs";
+export type TabId =
+  | "dashboard"
+  | "objectives"
+  | "ghost"
+  | "habits"
+  | "logs"
+  | "profile";
 
 function getInitialBootState() {
   if (typeof window === "undefined") return false;

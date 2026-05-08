@@ -3,16 +3,21 @@
 import { useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "@/context/AuthContext";
+import { supabase } from "@/lib/supabase";
 
 export default function OperatorLogin() {
   const { signIn, signUp } = useAuth();
   const [mode, setMode] = useState<"login" | "register">("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [username, setUsername] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
+  const usernamePattern = /^[a-z0-9_]{3,24}$/;
+  const usernameInvalid =
+    mode === "register" && username.length > 0 && !usernamePattern.test(username);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,7 +29,27 @@ export default function OperatorLogin() {
       const err = await signIn(email, password);
       if (err) setError(err);
     } else {
-      const err = await signUp(email, password);
+      if (!usernamePattern.test(username)) {
+        setError("Username must be 3-24 chars: lowercase letters, numbers, underscore.");
+        setLoading(false);
+        return;
+      }
+      const { data: existingRows, error: existsError } = await supabase
+        .from("operator_profile")
+        .select("id")
+        .ilike("username", username)
+        .limit(1);
+      if (existsError) {
+        setError(existsError.message);
+        setLoading(false);
+        return;
+      }
+      if ((existingRows ?? []).length > 0) {
+        setError("That username is already taken.");
+        setLoading(false);
+        return;
+      }
+      const err = await signUp(email, password, username);
       if (err) {
         setError(err);
       } else {
@@ -119,6 +144,54 @@ export default function OperatorLogin() {
             />
           </div>
 
+          {mode === "register" && (
+            <div style={{ marginBottom: "1rem" }}>
+              <label
+                style={{
+                  display: "block",
+                  fontSize: "0.65rem",
+                  color: "#888",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.1em",
+                  marginBottom: "0.5rem",
+                  fontWeight: 600,
+                }}
+              >
+                Username
+              </label>
+              <input
+                type="text"
+                value={username}
+                onChange={(e) => setUsername(e.target.value.toLowerCase())}
+                placeholder="your_handle"
+                required
+                minLength={3}
+                maxLength={24}
+                autoComplete="username"
+                style={{
+                  width: "100%",
+                  padding: "0.875rem 1rem",
+                  backgroundColor: "#111",
+                  border: usernameInvalid ? "1px solid #F43F5E" : "1px solid #222",
+                  borderRadius: "0.75rem",
+                  color: "#F0F0F0",
+                  fontSize: "16px",
+                  outline: "none",
+                  boxSizing: "border-box",
+                }}
+              />
+              <p
+                style={{
+                  marginTop: "0.4rem",
+                  fontSize: "0.65rem",
+                  color: usernameInvalid ? "#F43F5E" : "#888",
+                }}
+              >
+                3-24 chars: lowercase letters, numbers, underscore
+              </p>
+            </div>
+          )}
+
           <div style={{ marginBottom: "1.5rem" }}>
             <label
               style={{
@@ -194,7 +267,7 @@ export default function OperatorLogin() {
 
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || usernameInvalid}
             style={{
               width: "100%",
               padding: "0.875rem",
@@ -235,6 +308,7 @@ export default function OperatorLogin() {
               setMode(mode === "login" ? "register" : "login");
               setError(null);
               setSuccess(null);
+              setUsername("");
             }}
             style={{
               background: "none",
