@@ -1,5 +1,6 @@
 "use client";
 
+import { useMemo, useState } from "react";
 import { motion } from "framer-motion";
 import { BookOpen, Check, X, Shield, Sparkles, Trophy, Star, Rocket } from "lucide-react";
 import { useElite } from "@/context/EliteContext";
@@ -7,6 +8,12 @@ import { useElite } from "@/context/EliteContext";
 export default function LogsView() {
   const { logs, objectives } = useElite();
   const completedGoals = objectives.filter((o) => o.status === "Completed");
+  const [expanded, setExpanded] = useState(false);
+  const visibleLogs = useMemo(
+    () => (expanded ? logs : logs.slice(0, 7)),
+    [expanded, logs]
+  );
+  const hasMoreLogs = logs.length > 7;
 
 
   return (
@@ -66,7 +73,7 @@ export default function LogsView() {
         </motion.div>
       )}
 
-      {logs.map((log, i) => {
+      {visibleLogs.map((log, i) => {
         const nnHit = log.nnSummary.filter((n) => n.completed).length;
         const nnTotal = log.nnSummary.length;
         const habitsHit = log.habitSummary.filter((h) => h.completed).length;
@@ -266,6 +273,17 @@ export default function LogsView() {
           </motion.div>
         );
       })}
+
+      {hasMoreLogs && (
+        <div className="pt-1">
+          <button
+            onClick={() => setExpanded((prev) => !prev)}
+            className="px-3 py-2 text-xs font-semibold tracking-wider rounded-lg bg-card-border/40 hover:bg-card-border/60 text-muted transition-colors cursor-pointer"
+          >
+            {expanded ? "SHOW LESS" : `MORE (${logs.length - 7})`}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

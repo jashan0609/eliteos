@@ -240,6 +240,9 @@ export function EliteProvider({ children }: { children: ReactNode }) {
 
     async function fetchSystemState() {
       const userId = user!.id;
+      const retentionStart = toDateStr(
+        new Date(Date.now() - 30 * 86_400_000)
+      );
 
       // Fetch all tables in parallel
       const [profileRes, objRes, dhRes, nnRes, logsRes] = await Promise.all([
@@ -247,7 +250,12 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         supabase.from("objectives").select("*").eq("user_id", userId).order("created_at", { ascending: true }),
         supabase.from("daily_habits").select("*").eq("user_id", userId).order("created_at", { ascending: true }),
         supabase.from("non_negotiables").select("*").eq("user_id", userId).order("created_at", { ascending: true }),
-        supabase.from("daily_logs").select("*").eq("user_id", userId).order("created_at", { ascending: false }),
+        supabase
+          .from("daily_logs")
+          .select("*")
+          .eq("user_id", userId)
+          .gte("date", retentionStart)
+          .order("date", { ascending: false }),
       ]);
 
       if (cancelled) return;

@@ -91,6 +91,7 @@ create index if not exists friend_requests_sender_idx on friend_requests (sender
 create index if not exists friend_requests_receiver_idx on friend_requests (receiver_id, status, created_at desc);
 create index if not exists friendships_low_idx on friendships (user_low_id);
 create index if not exists friendships_high_idx on friendships (user_high_id);
+create index if not exists daily_logs_user_date_idx on daily_logs (user_id, date desc);
 
 -- ═══ Table Grants ═══
 
