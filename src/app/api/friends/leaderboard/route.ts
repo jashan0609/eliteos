@@ -31,7 +31,7 @@ export async function GET(req: Request) {
 
   try {
     const userId = auth.user!.id;
-    const [profileRes, friendshipsRes] = await Promise.all([
+    const [profileRes, friendshipsRes, acceptedRes] = await Promise.all([
       supabaseAdmin
         .from("operator_profile")
         .select("id, username, xp, streak")
@@ -41,13 +41,39 @@ export async function GET(req: Request) {
         .from("friendships")
         .select("user_low_id, user_high_id")
         .or(`user_low_id.eq.${userId},user_high_id.eq.${userId}`),
+      supabaseAdmin
+        .from("friend_requests")
+        .select("sender_id, receiver_id")
+        .eq("status", "accepted")
+        .or(`sender_id.eq.${userId},receiver_id.eq.${userId}`),
     ]);
     if (profileRes.error || !profileRes.data) throw new Error(formatError(profileRes.error));
     if (friendshipsRes.error) throw new Error(formatError(friendshipsRes.error));
+    if (acceptedRes.error) throw new Error(formatError(acceptedRes.error));
 
-    const friendIds = (friendshipsRes.data ?? []).map((row) =>
+    // Defence in depth. Writes to `friendships` are service-role-only as of the
+    // Phase 0 lockdown, but this endpoint hands out another operator's full
+    // history, so it does not take that table's word for it: every friendship
+    // must still be backed by an accepted request from the other party.
+    const acceptedCounterparts = new Set(
+      (acceptedRes.data ?? []).map((row) =>
+        row.sender_id === userId ? row.receiver_id : row.sender_id
+      )
+    );
+    const claimedFriendIds = (friendshipsRes.data ?? []).map((row) =>
       row.user_low_id === userId ? row.user_high_id : row.user_low_id
     );
+    const friendIds = claimedFriendIds.filter((id) => acceptedCounterparts.has(id));
+
+    const unbacked = claimedFriendIds.filter((id) => !acceptedCounterparts.has(id));
+    if (unbacked.length > 0) {
+      // Should be unreachable. If it fires, someone has write access to
+      // `friendships` that they should not have.
+      console.error(
+        `[FRIENDSHIP_WITHOUT_ACCEPTED_REQUEST] user=${userId} rejected=${unbacked.join(",")}`
+      );
+    }
+
     const allIds = Array.from(new Set([userId, ...friendIds]));
 
     const [profilesRes, logsRes] = await Promise.all([

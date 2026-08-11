@@ -22,10 +22,13 @@ export async function POST(req: Request) {
     const senderId = auth.user!.id;
     const [senderProfileRes, receiverProfileRes] = await Promise.all([
       supabaseAdmin.from("operator_profile").select("id, username").eq("id", senderId).single(),
+      // `.eq`, not `.ilike`: underscore is a legal username character AND a
+      // LIKE wildcard, so `.ilike` matches `abc` when searching for `a_c`.
+      // Usernames are stored lowercase by every write path.
       supabaseAdmin
         .from("operator_profile")
         .select("id, username")
-        .ilike("username", normalized)
+        .eq("username", normalized)
         .maybeSingle(),
     ]);
 

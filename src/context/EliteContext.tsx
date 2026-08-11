@@ -121,6 +121,8 @@ export function getLevelData(xp: number): LevelData {
 interface EliteContextValue extends EliteState {
   loading: boolean;
   arenaLoading: boolean;
+  loadError: string | null;
+  retryLoad: () => void;
   levelData: LevelData;
   updateXP: (amount: number) => void;
   addObjective: (obj: Omit<Objective, "id" | "progress" | "status">) => void;
@@ -199,6 +201,9 @@ export function EliteProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<EliteState>(DEFAULT_STATE);
   const [loading, setLoading] = useState(true);
   const [arenaLoading, setArenaLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  // Bumping this re-runs the load effect — the retry button's mechanism.
+  const [reloadNonce, setReloadNonce] = useState(0);
 
   // Prevents rapid-fire toggles from creating race conditions
   const pendingToggles = useRef<Set<string>>(new Set());
@@ -235,13 +240,22 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     }
 
     queueMicrotask(() => {
-      if (!cancelled) setLoading(true);
+      if (cancelled) return;
+      setLoading(true);
+      setLoadError(null);
     });
 
-    async function fetchSystemState() {
+    // Returns the loaded state rather than committing it, so the caller below
+    // owns every setState — including the `finally` that clears the loading
+    // flag on every exit path.
+    async function fetchSystemState(): Promise<EliteState | null> {
       const userId = user!.id;
+      // Log dates are written in the user's local day, so the retention window
+      // has to be measured there too — otherwise users west of UTC lose a day.
+      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
       const retentionStart = toDateStr(
-        new Date(Date.now() - 30 * 86_400_000)
+        new Date(Date.now() - 30 * 86_400_000),
+        userTimezone
       );
 
       // Fetch all tables in parallel
@@ -258,26 +272,19 @@ export function EliteProvider({ children }: { children: ReactNode }) {
           .order("date", { ascending: false }),
       ]);
 
-      if (cancelled) return;
+      if (cancelled) return null;
 
-      // If no profile yet, create one (first login)
+      // The profile row is created by the `on_auth_user_created` trigger, in
+      // the same transaction that creates the account. The client used to
+      // insert it here and discard the error, which turned a username
+      // collision into an account with no profile and a permanent spinner.
       let profile = profileRes.data;
       if (!profile) {
-        const signupUsername =
-          typeof user?.user_metadata?.username === "string"
-            ? user.user_metadata.username.toLowerCase()
-            : null;
-        const { data: newProfile } = await supabase
-          .from("operator_profile")
-          .insert({ id: userId, ...(signupUsername ? { username: signupUsername } : {}) })
-          .select()
-          .single();
-        profile = newProfile;
+        throw new Error(
+          "Your profile could not be loaded. If this persists, contact support."
+        );
       }
-
-      if (!profile || cancelled) return;
-
-      const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (cancelled) return null;
 
       if (profile.timezone !== userTimezone) {
         // Keep timezone fresh so both login recovery and cron align
@@ -305,18 +312,24 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         });
 
         for (const day of resetPlan.days) {
+          // Upsert, not insert: another tab or the nightly cron can archive the
+          // same day concurrently, and (user_id, date) is unique. Losing that
+          // race yields zero rows, hence maybeSingle().
           const { data: insertedLog } = await supabase
             .from("daily_logs")
-            .insert({
-              user_id: userId,
-              date: day.date,
-              nn_summary: day.nnSummary,
-              habit_summary: day.habitSummary,
-              total_xp_at_time: day.xpAtTime,
-              penalty: day.penalty,
-            })
+            .upsert(
+              {
+                user_id: userId,
+                date: day.date,
+                nn_summary: day.nnSummary,
+                habit_summary: day.habitSummary,
+                total_xp_at_time: day.xpAtTime,
+                penalty: day.penalty,
+              },
+              { onConflict: "user_id,date", ignoreDuplicates: true }
+            )
             .select()
-            .single();
+            .maybeSingle();
 
           if (insertedLog) {
             logRows = [insertedLog, ...logRows];
@@ -438,15 +451,36 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         friendCount: 0,
       };
 
-      if (!cancelled) {
-        setState(loadedState);
-        setLoading(false);
-      }
+      return loadedState;
     }
 
-    fetchSystemState();
+    fetchSystemState()
+      .then((loadedState) => {
+        if (cancelled || !loadedState) return;
+        setState(loadedState);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        console.error("[SYSTEM_STATE_LOAD_FAILURE]", err);
+        setLoadError(
+          err instanceof Error
+            ? err.message
+            : "Could not load your system state."
+        );
+      })
+      .finally(() => {
+        // Every exit path lands here. Previously an early return could leave
+        // `loading` true forever, stranding the operator on the sync screen.
+        if (!cancelled) setLoading(false);
+      });
+
     return () => { cancelled = true; };
-  }, [user]);
+  }, [user, reloadNonce]);
+
+  const retryLoad = useCallback(() => {
+    setLoadError(null);
+    setReloadNonce((n) => n + 1);
+  }, []);
 
   const authedJson = useCallback(
     async (path: string, init?: RequestInit) => {
@@ -978,6 +1012,8 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     ...state,
     loading,
     arenaLoading,
+    loadError,
+    retryLoad,
     levelData,
     updateXP,
     addObjective,

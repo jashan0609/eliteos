@@ -3,7 +3,6 @@
 import { useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "@/context/AuthContext";
-import { supabase } from "@/lib/supabase";
 
 export default function OperatorLogin() {
   const { signIn, signUp } = useAuth();
@@ -34,18 +33,30 @@ export default function OperatorLogin() {
         setLoading(false);
         return;
       }
-      const { data: existingRows, error: existsError } = await supabase
-        .from("operator_profile")
-        .select("id")
-        .ilike("username", username)
-        .limit(1);
-      if (existsError) {
-        setError(existsError.message);
-        setLoading(false);
-        return;
-      }
-      if ((existingRows ?? []).length > 0) {
-        setError("That username is already taken.");
+      // Checked server-side — the browser has no read access to other
+      // operators' profiles. Advisory only: if a collision slips through this
+      // gap, the database resolves it by suffixing rather than failing.
+      try {
+        const res = await fetch("/api/auth/check-username", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ username }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data?.error ?? "Could not check that username.");
+        }
+        if (!data.available) {
+          setError(data.error ?? "That username is already taken.");
+          setLoading(false);
+          return;
+        }
+      } catch (checkError) {
+        setError(
+          checkError instanceof Error
+            ? checkError.message
+            : "Could not check that username."
+        );
         setLoading(false);
         return;
       }

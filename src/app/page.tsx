@@ -24,8 +24,8 @@ function getInitialBootState() {
 }
 
 export default function Home() {
-  const { user, loading: authLoading } = useAuth();
-  const { loading: dataLoading } = useElite();
+  const { user, loading: authLoading, signOut } = useAuth();
+  const { loading: dataLoading, loadError, retryLoad } = useElite();
   const [booted, setBooted] = useState(getInitialBootState);
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
 
@@ -48,6 +48,39 @@ export default function Home() {
     return (
       <main className="h-screen w-screen overflow-hidden bg-bg">
         <OperatorLogin />
+      </main>
+    );
+  }
+
+  // Logged in, but the state load failed. Without this the operator would sit
+  // on the sync screen indefinitely with no way out.
+  if (loadError) {
+    return (
+      <main className="h-screen w-screen bg-bg flex items-center justify-center p-6">
+        <div className="text-center max-w-sm">
+          <h1 className="text-2xl font-bold tracking-tight mb-2">
+            <span className="text-violet">Elite</span>
+            <span className="text-text">OS</span>
+          </h1>
+          <p className="text-xs uppercase tracking-wider text-pink font-semibold mb-3">
+            Sync failed
+          </p>
+          <p className="text-sm text-muted mb-6">{loadError}</p>
+          <div className="flex gap-2 justify-center">
+            <button
+              onClick={retryLoad}
+              className="px-4 py-2 rounded-lg text-xs font-semibold bg-violet/15 text-violet hover:bg-violet/25 cursor-pointer transition-colors"
+            >
+              RETRY
+            </button>
+            <button
+              onClick={() => signOut()}
+              className="px-4 py-2 rounded-lg text-xs font-semibold bg-card-border/40 text-muted hover:bg-card-border/60 cursor-pointer transition-colors"
+            >
+              SIGN OUT
+            </button>
+          </div>
+        </div>
       </main>
     );
   }
