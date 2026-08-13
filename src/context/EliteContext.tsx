@@ -16,6 +16,13 @@ import {
   toDateStr,
   type ResettableHabit,
 } from "@/lib/daily-reset";
+import {
+  applyXpDelta,
+  computeObjectiveProgress,
+  computeToggle,
+  XP_PER_DAILY_HABIT,
+  XP_PER_NON_NEGOTIABLE,
+} from "@/lib/economy";
 import { useAuth } from "@/context/AuthContext";
 import XPToast from "@/components/XPToast";
 import LevelUpToast from "@/components/LevelUpToast";
@@ -734,7 +741,11 @@ export function EliteProvider({ children }: { children: ReactNode }) {
       if (!habit) return;
 
       const completing = !habit.completedToday;
-      const xpDelta = completing ? 15 : -15;
+      const { xpDelta } = computeToggle({
+        kind: "daily",
+        currentXp: state.xp,
+        completing,
+      });
 
       pendingToggles.current.add(id);
 
@@ -742,7 +753,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
       setState((prev) => {
         const h = prev.dailyHabits.find((h) => h.id === id);
         if (!h) return prev;
-        const newXp = Math.max(0, prev.xp + xpDelta);
+        const newXp = applyXpDelta(prev.xp, xpDelta);
         return {
           ...prev,
           xp: newXp,
@@ -754,14 +765,18 @@ export function EliteProvider({ children }: { children: ReactNode }) {
       });
 
       if (completing) haptic([40, 30, 40]);
-      showToast(completing ? "gain" : "loss", 15, completing ? "+15 XP" : "-15 XP");
+      showToast(
+        completing ? "gain" : "loss",
+        XP_PER_DAILY_HABIT,
+        completing ? `+${XP_PER_DAILY_HABIT} XP` : `-${XP_PER_DAILY_HABIT} XP`
+      );
 
       // Persist to DB — rollback on failure
       if (user) {
         Promise.all([
           supabase.from("daily_habits").update({ completed_today: completing }).eq("id", id),
           supabase.from("operator_profile").update({
-            xp: Math.max(0, state.xp + xpDelta),
+            xp: applyXpDelta(state.xp, xpDelta),
             ...(completing ? { last_check_in: new Date().toISOString() } : {}),
           }).eq("id", user.id),
         ]).then(([habitRes, profileRes]) => {
@@ -769,7 +784,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
           if (habitRes.error || profileRes.error) {
             setState((prev) => ({
               ...prev,
-              xp: Math.max(0, prev.xp - xpDelta),
+              xp: applyXpDelta(prev.xp, -xpDelta),
               dailyHabits: prev.dailyHabits.map((h) =>
                 h.id === id ? { ...h, completedToday: !completing } : h
               ),
@@ -847,7 +862,11 @@ export function EliteProvider({ children }: { children: ReactNode }) {
       if (!habit) return;
 
       const completing = !habit.completedToday;
-      const xpDelta = completing ? 30 : -30;
+      const { xpDelta } = computeToggle({
+        kind: "non-negotiable",
+        currentXp: state.xp,
+        completing,
+      });
 
       pendingToggles.current.add(id);
 
@@ -855,7 +874,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
       setState((prev) => {
         const h = prev.nonNegotiables.find((h) => h.id === id);
         if (!h) return prev;
-        const newXp = Math.max(0, prev.xp + xpDelta);
+        const newXp = applyXpDelta(prev.xp, xpDelta);
         return {
           ...prev,
           xp: newXp,
@@ -867,14 +886,20 @@ export function EliteProvider({ children }: { children: ReactNode }) {
       });
 
       if (completing) haptic([60, 40, 60]);
-      showToast(completing ? "gain" : "loss", 30, completing ? "+30 XP" : "-30 XP");
+      showToast(
+        completing ? "gain" : "loss",
+        XP_PER_NON_NEGOTIABLE,
+        completing
+          ? `+${XP_PER_NON_NEGOTIABLE} XP`
+          : `-${XP_PER_NON_NEGOTIABLE} XP`
+      );
 
       // Persist to DB — rollback on failure
       if (user) {
         Promise.all([
           supabase.from("non_negotiables").update({ completed_today: completing }).eq("id", id),
           supabase.from("operator_profile").update({
-            xp: Math.max(0, state.xp + xpDelta),
+            xp: applyXpDelta(state.xp, xpDelta),
             ...(completing ? { last_check_in: new Date().toISOString() } : {}),
           }).eq("id", user.id),
         ]).then(([habitRes, profileRes]) => {
@@ -882,7 +907,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
           if (habitRes.error || profileRes.error) {
             setState((prev) => ({
               ...prev,
-              xp: Math.max(0, prev.xp - xpDelta),
+              xp: applyXpDelta(prev.xp, -xpDelta),
               nonNegotiables: prev.nonNegotiables.map((h) =>
                 h.id === id ? { ...h, completedToday: !completing } : h
               ),
@@ -937,40 +962,39 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         const obj = prev.objectives.find((o) => o.id === id);
         if (!obj || obj.status === "Completed") return prev;
 
-        const next = Math.min(obj.progress + 10, 100);
-        const justCompleted = next === 100 && obj.status === "Active";
-        const xpReward = justCompleted
-          ? obj.type === "north-star"
-            ? 500
-            : 200
-          : 0;
-        const newXp = prev.xp + xpReward;
+        const {
+          nextProgress,
+          nextStatus,
+          xpAwarded,
+          nextXp,
+        } = computeObjectiveProgress({
+          currentProgress: obj.progress,
+          currentStatus: obj.status,
+          type: obj.type,
+          currentXp: prev.xp,
+        });
 
         // Async DB update
         if (user) {
           supabase
             .from("objectives")
             .update({
-              progress: next,
-              ...(justCompleted ? { status: "Completed" } : {}),
+              progress: nextProgress,
+              ...(xpAwarded > 0 ? { status: nextStatus } : {}),
             })
             .eq("id", id)
             .then(() => {});
-          if (xpReward > 0) {
-            patchProfile(user.id, { xp: newXp });
+          if (xpAwarded > 0) {
+            patchProfile(user.id, { xp: nextXp });
           }
         }
 
         return {
           ...prev,
-          xp: newXp,
+          xp: nextXp,
           objectives: prev.objectives.map((o) =>
             o.id === id
-              ? {
-                  ...o,
-                  progress: next,
-                  status: justCompleted ? ("Completed" as const) : o.status,
-                }
+              ? { ...o, progress: nextProgress, status: nextStatus }
               : o
           ),
         };
@@ -978,19 +1002,23 @@ export function EliteProvider({ children }: { children: ReactNode }) {
 
       // Toast
       const obj = state.objectives.find((o) => o.id === id);
-      if (obj && obj.status === "Active") {
-        const next = Math.min(obj.progress + 10, 100);
-        if (next === 100) {
-          const reward = obj.type === "north-star" ? 500 : 200;
+      if (obj) {
+        const { xpAwarded } = computeObjectiveProgress({
+          currentProgress: obj.progress,
+          currentStatus: obj.status,
+          type: obj.type,
+          currentXp: state.xp,
+        });
+        if (xpAwarded > 0) {
           const label =
             obj.type === "north-star"
               ? "NORTH_STAR_ACHIEVED"
               : "SPRINT_COMPLETE";
-          showToast("gain", reward, `${label}: +${reward} XP`);
+          showToast("gain", xpAwarded, `${label}: +${xpAwarded} XP`);
         }
       }
     },
-    [showToast, state.objectives, user]
+    [showToast, state.objectives, state.xp, user]
   );
 
   const editObjective = useCallback(
