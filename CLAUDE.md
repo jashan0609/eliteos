@@ -292,55 +292,54 @@ Archived day summaries used for:
 - Arena scoring
 - XP history chart
 
-## 5. SQL / Supabase Scripts
+## 5. Database Migrations
 
-> **Do not run the legacy `.sql` files in this repo.** They describe a state
-> the database has moved past, and several of them would actively undo the
-> Phase 0 security work. They are kept only as history until the migration
-> baseline lands. Git is the archive; they are scheduled for deletion.
+**The schema lives in `supabase/migrations/` and nowhere else.** The eleven
+hand-run `.sql` files that used to sit here were deleted on August 13, 2026,
+when Phase 1 landed. Git has them if you ever need the archaeology; do not
+resurrect them, and above all do not run them — `fix-permissions.sql` and
+`grants.sql` would silently re-grant exactly what Phase 0 revoked and reopen
+the friendship data-exposure hole.
 
-### The one script that is current
+### The baseline
 
-[supabase/phase-0-hardening.sql](/Users/jashanubhi/Desktop/coding/elite/supabase/phase-0-hardening.sql)
-— applied to production on August 11, 2026. Closes the friendship-forgery data
-exposure, moves profile creation into an `auth.users` trigger, and removes the
-`anon` read grants. Its steps deliberately straddle a code deploy and must not
-be run in one go; the header explains the ordering. Already applied — do not
-re-run without reading it.
+- `supabase/migrations/20260813080640_remote_schema.sql` — captured mechanically
+  with `supabase db pull` against production. It is *reality*, not an idealised
+  schema: 7 tables, 20 policies, RLS on every table, the FK cascades to
+  `auth.users`, and the `daily_logs_user_date_idx` unique index that existed in
+  production but appeared in no repo file. `db pull` also recorded it as
+  already-applied remotely, so a later `db push` will not re-run this DDL
+  against live data.
+- `supabase/migrations/20260813080755_auth_user_profile_trigger.sql` — the
+  `on_auth_user_created` trigger. **`db pull` captures the `public` schema
+  only**, so it took `handle_new_user()` (which lives in `public`) but not the
+  trigger on `auth.users` that invokes it. Without this file a rebuild produces
+  a function nobody calls, and new signups get an auth row with no profile —
+  the bricked-account bug all over again. Idempotent, so applying it to
+  production is a no-op.
 
-### Why the legacy scripts are dangerous, not merely stale
+Verified on August 13, 2026: both migrations apply cleanly to a database built
+from scratch (`supabase start`), and the resulting database has the trigger on
+`auth.users`, SELECT-only grants for `authenticated` on the friend tables, the
+unique index, and zero `anon` grants in `public`. `supabase db diff --linked
+--schema public` reports no schema changes.
 
-- [supabase/fix-permissions.sql](/Users/jashanubhi/Desktop/coding/elite/supabase/fix-permissions.sql)
-  advertises itself as a safe idempotent repair. It is now the single most
-  dangerous file here: running it re-grants table-wide privileges and
-  recreates policies that Phase 0 revoked, silently reopening the friendship
-  hole. It also predates the friends feature, so it covers only five of the
-  seven tables.
-- [supabase/grants.sql](/Users/jashanubhi/Desktop/coding/elite/supabase/grants.sql)
-  grants `select` to `anon` on five tables, justified by a comment claiming
-  PostgREST needs it to initialise. That claim is false. Phase 0 revoked these.
-- [supabase/cron-setup.sql](/Users/jashanubhi/Desktop/coding/elite/supabase/cron-setup.sql)
-  schedules a `pg_cron` job that reads a GUC nothing sets, so it has been
-  sending `Bearer ` and 401ing since it was created. Vercel cron is the real
-  scheduler. Unschedule `eliteos-daily-reset` if it still exists.
-- [supabase/indexes.sql](/Users/jashanubhi/Desktop/coding/elite/supabase/indexes.sql)
-  is an empty stub.
-- [supabase-schema.sql](/Users/jashanubhi/Desktop/coding/elite/supabase-schema.sql)
-  is **not** an accurate description of production. It lacks the unique
-  constraint on `daily_logs (user_id, date)` that both upsert call sites
-  depend on, and it still contains the dropped friendship policies.
-- [supabase/friends-system.sql](/Users/jashanubhi/Desktop/coding/elite/supabase/friends-system.sql),
-  [supabase/log-retention.sql](/Users/jashanubhi/Desktop/coding/elite/supabase/log-retention.sql),
-  and [supabase/add-timezone.sql](/Users/jashanubhi/Desktop/coding/elite/supabase/add-timezone.sql)
-  have all been applied and are historical.
+### The blind spot that bit us twice
 
-### Where this is going
+`db pull --schema public` does not see the `auth`, `cron`, or `storage`
+schemas. Two things lived there and were nearly lost:
 
-The repo and the live database have measurably diverged, because everything
-here was applied by hand through the SQL editor in an order nobody recorded.
-The fix is `supabase db pull` against production to capture reality as a
-migration baseline, after which all schema change flows through
-`supabase/migrations/` and nothing is hand-applied again. See section 18.
+- the `on_auth_user_created` trigger (now pinned by its own migration above);
+- the `pg_cron` jobs, which are **not** in any migration and must be managed by
+  hand in the SQL editor. See section 6.
+
+If you add anything outside `public`, write it a migration by hand — the pull
+will not do it for you.
+
+### Adding a schema change
+
+`supabase migration new <name>`, edit the generated file, verify locally with
+`supabase db reset`, then `supabase db push`. Nothing is applied by hand again.
 
 ## 6. Logs Retention Rules
 
@@ -355,6 +354,30 @@ Important implication:
 - the DB is intentionally not a long-term historical warehouse anymore
 - old log months should be pruned
 - anything that depends on `daily_logs` should be designed around short-term history
+
+### Scheduled jobs (not in any migration)
+
+Two schedulers exist and neither is captured by `supabase db pull`. Audited
+August 13, 2026 with `select jobid, jobname, schedule, command from cron.job;`:
+
+- **`eliteos-log-retention`** (`pg_cron`, `15 1 * * *`) — **live and load-bearing.**
+  Runs `delete from daily_logs where date < (current_date - interval '1 month')`.
+  This is what enforces the rolling month; the 31 days of history observed in
+  production match it exactly. Do not remove it. Known cosmetic flaw: it
+  compares against `current_date` (UTC) while log dates are written in each
+  user's local day, so an operator well ahead of UTC can lose a log a few hours
+  early.
+- **Vercel cron** (`vercel.json`, `0 * * * *`) — hits `/api/system/reset` hourly.
+  The `last_habit_reset === today` guard makes it idempotent, so hourly is safe
+  and closes the timezone-lateness window. **This is the real reset scheduler.**
+
+A third job, `daily-system-reset` (`pg_cron`, `0 0 * * *`), was unscheduled on
+August 13, 2026. It had never worked: its URL was the literal, unsubstituted
+placeholder `https://<REFERENCE_ID>.supabase.co/functions/v1/daily-reset`, a
+hostname that has never resolved, pointing at a Supabase Edge Function that was
+never deployed. (Earlier revisions of this file claimed it failed by reading an
+unset GUC and sending an empty `Bearer ` — that diagnosis was wrong. The
+conclusion, that the job was dead, was right.)
 
 ## 7. Arena Scoring Rules
 
@@ -475,8 +498,10 @@ verification that:
   - leaderboard display
   - Profile edit flow
 - Be careful with reset logic because it is timezone-aware and easy to break.
-- **Never run `supabase/fix-permissions.sql` or `supabase/grants.sql`.** They
-  re-grant privileges Phase 0 deliberately revoked. See section 5.
+- **Never resurrect the deleted `.sql` files from git history and run them.**
+  `fix-permissions.sql` and `grants.sql` in particular re-grant privileges
+  Phase 0 deliberately revoked and would reopen the friendship data-exposure
+  hole. They are history, not a toolbox. See section 5.
 - Do not "fix" a cross-user read problem by loosening an RLS SELECT policy or
   adding an `anon` grant. The anon key ships to every browser. Route it through
   a server endpoint with `supabaseAdmin` instead — that is why
@@ -487,6 +512,18 @@ verification that:
   returns it to the browser on a 500. That leaks constraint names, column names
   and query hints. Scheduled to be fixed alongside error monitoring; do not
   copy the pattern into new routes.
+- **Never key an effect on the `user` or `session` *object* from `AuthContext`.**
+  That context calls `setUser(s?.user ?? null)` on every `onAuthStateChange`
+  event, minting a fresh object even when nothing changed. On August 13, 2026
+  this put the app in a permanent request storm: the system-state load effect
+  and the friends-arena effect both re-ran on every auth event, and each re-run
+  issued Supabase requests that themselves settled the auth state, firing the
+  next event. Measured at 72 fetches in 5 seconds while idle — 8 complete
+  re-runs of `fetchSystemState` plus 16 calls each to two API routes. Always
+  depend on `user?.id` and `session?.access_token`, which are stable primitives.
+  The symptom is easy to misread as "the preview is slow" or "that's just
+  StrictMode double-invoking"; it is neither. Measure with a `window.fetch`
+  counter before believing either explanation.
 
 ### Known-open security gap
 
@@ -529,12 +566,28 @@ Nothing in the suite touches Supabase, so it is safe to run at any time.
 ## 14. If You Need To Push Schema Changes
 
 **Do not add another hand-run `.sql` file.** That workflow is what produced the
-current divergence between this repo and production. Until the migration
-baseline lands (section 18), treat any schema change as blocked on that work,
-or apply it deliberately and write it down here.
+divergence Phase 1 spent a day reconciling. The migration flow is now live:
 
-Once `supabase/migrations/` exists: `supabase migration new <name>`, edit,
-`supabase db push`.
+```bash
+supabase migration new <name>   # creates supabase/migrations/<ts>_<name>.sql
+# edit it
+supabase db reset               # rebuild locally from scratch and verify
+supabase db push                # apply to production
+```
+
+`supabase db reset` is the cheap safety net — it replays every migration onto an
+empty database, so it catches ordering mistakes and typos before production
+does. Run it every time.
+
+Two caveats that have already caused problems:
+
+- **Anything outside the `public` schema needs a hand-written migration.**
+  `db pull` will not capture triggers on `auth.users`, `pg_cron` jobs, or
+  storage policies. See section 5.
+- **The CLI must be authenticated** (`supabase login`, or `SUPABASE_ACCESS_TOKEN`
+  exported) and linked (`supabase link --project-ref mfrffkbbkiiznbgwqxdw`).
+  On macOS the keychain prompt asks for your *Mac login password*, not a
+  Supabase one.
 
 Whatever the mechanism, a DB change usually needs matching updates in:
 
@@ -576,16 +629,20 @@ Useful entry points:
 
 ## 16. Short Status Snapshot
 
-As of August 11, 2026:
+As of August 13, 2026:
 
 - friends-based Arena is live
 - username-at-signup flow is live
 - Profile tab is live
 - logs are weekly-first in UI
-- monthly log retention strategy is implemented
+- monthly log retention strategy is implemented, enforced by a `pg_cron` job
 - unit test suite is live (`npm test`, 35 tests, no framework dependency)
 - Phase 0 hardening is applied to production, in both code and database
-- the app is being taken from "personal tool" to "public signups"; Phases 1-8
+- **Phase 1 is complete**: the schema is under `supabase/migrations/`, the
+  eleven hand-run `.sql` files are deleted, and repo and production are
+  reconciled (`db diff` reports no changes)
+- the auth-state request storm is fixed — see the note in section 12
+- the app is being taken from "personal tool" to "public signups"; Phases 2-8
   of that work remain (section 18)
 
 ## 17. Known Configuration Issues
@@ -613,9 +670,11 @@ The full plan lives at
 `~/.claude/plans/lets-make-a-plan-bright-hopper.md`. Summary of remaining work,
 in dependency order — the ordering is load-bearing, not preference:
 
-1. **Phase 1 — migration baseline.** `supabase db pull` against production,
-   verify with `supabase db diff` until empty, then delete the legacy `.sql`
-   files and update section 5 of this file.
+1. ~~**Phase 1 — migration baseline.**~~ **Done, August 13, 2026.** Baseline
+   pulled from production, auth trigger pinned by a second migration, verified
+   by a from-scratch local rebuild, `db diff --linked --schema public` clean,
+   eleven legacy `.sql` files deleted, dead `daily-system-reset` cron job
+   unscheduled. See sections 5 and 6.
 2. **Phase 2 — economy kernel.** New `src/lib/economy.ts` holding the XP
    constants currently inlined in `EliteContext` (15/30/500/200) plus the
    toggle and objective-progress calculations. Pure, tested, isomorphic.
