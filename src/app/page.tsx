@@ -25,7 +25,12 @@ function getInitialBootState() {
 
 export default function Home() {
   const { user, loading: authLoading, signOut } = useAuth();
-  const { loading: dataLoading, loadError, retryLoad } = useElite();
+  const {
+    loading: dataLoading,
+    loadError,
+    retryLoad,
+    buildMismatch,
+  } = useElite();
   const [booted, setBooted] = useState(getInitialBootState);
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
 
@@ -104,6 +109,24 @@ export default function Home() {
 
   return (
     <main className="h-screen w-screen overflow-hidden bg-bg">
+      {/*
+        This tab is running JavaScript from an older deploy. Harmless today,
+        but once Phase 5 revokes the client's write grants an old tab's direct
+        writes will 42501 and loop on "SYNC_FAILED" with no hint that a reload
+        is the entire fix. Say so plainly instead.
+      */}
+      {buildMismatch && (
+        <div className="fixed top-0 inset-x-0 z-50 flex items-center justify-center gap-3 bg-violet px-4 py-2 text-sm text-white shadow-lg">
+          <span>A new version of EliteOS is available.</span>
+          <button
+            onClick={() => window.location.reload()}
+            className="rounded-md bg-white/20 px-3 py-1 font-medium hover:bg-white/30 transition-colors cursor-pointer"
+          >
+            RELOAD
+          </button>
+        </div>
+      )}
+
       {!booted && <TerminalBoot onBootComplete={handleBootComplete} />}
 
       <AnimatePresence>

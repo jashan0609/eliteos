@@ -10,18 +10,17 @@ import {
   type ReactNode,
 } from "react";
 import { supabase } from "@/lib/supabase";
-import {
-  buildResetPlan,
-  getUpdatedGlobalStreak,
-  toDateStr,
-  type ResettableHabit,
-} from "@/lib/daily-reset";
+// `buildResetPlan` and `getUpdatedGlobalStreak` are gone from this file as of
+// Phase 4: the reset they powered now runs server-side in
+// `src/lib/server/run-daily-reset.ts`, reached via POST /api/system/sync.
+import { toDateStr, type ResettableHabit } from "@/lib/daily-reset";
 import {
   applyXpDelta,
-  computeObjectiveProgress,
   computeToggle,
+  xpForHabitKind,
   XP_PER_DAILY_HABIT,
   XP_PER_NON_NEGOTIABLE,
+  type HabitKind,
 } from "@/lib/economy";
 import { useAuth } from "@/context/AuthContext";
 import XPToast from "@/components/XPToast";
@@ -130,18 +129,29 @@ interface EliteContextValue extends EliteState {
   arenaLoading: boolean;
   loadError: string | null;
   retryLoad: () => void;
+  /** True once an API response reports a newer build than this tab is running. */
+  buildMismatch: boolean;
   levelData: LevelData;
-  updateXP: (amount: number) => void;
-  addObjective: (obj: Omit<Objective, "id" | "progress" | "status">) => void;
-  incrementObjectiveProgress: (id: string) => void;
-  deleteObjective: (id: string) => void;
-  editObjective: (id: string, data: { title: string; description: string }) => void;
-  addDailyHabit: (title: string) => void;
-  editDailyHabit: (id: string, title: string) => void;
-  deleteDailyHabit: (id: string) => void;
-  addNonNegotiable: (title: string) => void;
-  editNonNegotiable: (id: string, title: string) => void;
-  deleteNonNegotiable: (id: string) => void;
+  // Every write now reports failure instead of swallowing it. `null` means it
+  // landed; a string is a message worth showing.
+  addObjective: (
+    obj: Omit<Objective, "id" | "progress" | "status">
+  ) => Promise<string | null>;
+  incrementObjectiveProgress: (id: string) => Promise<string | null>;
+  deleteObjective: (id: string) => Promise<string | null>;
+  editObjective: (
+    id: string,
+    data: { title: string; description: string }
+  ) => Promise<string | null>;
+  addDailyHabit: (title: string) => Promise<string | null>;
+  editDailyHabit: (id: string, title: string) => Promise<string | null>;
+  deleteDailyHabit: (id: string) => Promise<string | null>;
+  addNonNegotiable: (title: string) => Promise<string | null>;
+  editNonNegotiable: (id: string, title: string) => Promise<string | null>;
+  deleteNonNegotiable: (id: string) => Promise<string | null>;
+  // Deliberately still `void`: the optimistic update plus reconcile-on-response
+  // means callers have nothing useful to await, and keeping this signature is
+  // what lets HabitsView stay completely unchanged.
   toggleDailyHabit: (id: string) => void;
   toggleNonNegotiable: (id: string) => void;
   updateUsername: (username: string) => Promise<string | null>;
@@ -183,6 +193,34 @@ export function useElite(): EliteContextValue {
   return ctx;
 }
 
+/**
+ * The build this tab was loaded from. Compared against the `x-app-build`
+ * header every API response carries; see `next.config.ts`.
+ */
+const CLIENT_BUILD_ID = process.env.NEXT_PUBLIC_BUILD_ID ?? "";
+
+/** Server state that superseded ours — a 409, not a failure. */
+interface ServerStale {
+  habit?: { id: string; completedToday: boolean; streak: number } | null;
+  objective?: {
+    id: string;
+    progress: number;
+    status: Objective["status"];
+  } | null;
+  xp?: number | null;
+  streak?: number | null;
+  lastCheckIn?: string | null;
+}
+
+class StaleStateError extends Error {
+  readonly state: ServerStale | null;
+  constructor(state: ServerStale | null) {
+    super("STALE");
+    this.name = "StaleStateError";
+    this.state = state;
+  }
+}
+
 // ── Haptic feedback (mobile only) ──
 
 function haptic(pattern: number | number[] = 30) {
@@ -192,14 +230,9 @@ function haptic(pattern: number | number[] = 30) {
   }
 }
 
-// ── Helper: update profile column(s) ──
-
-async function patchProfile(
-  userId: string,
-  fields: Record<string, unknown>
-) {
-  await supabase.from("operator_profile").update(fields).eq("id", userId);
-}
+// `patchProfile` lived here until Phase 4. It is gone because nothing on the
+// client writes to `operator_profile` any more except `updateUsername`, which
+// does its own scoped update. Every XP and streak write goes through the API.
 
 // ── Provider ──
 
@@ -217,6 +250,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [arenaLoading, setArenaLoading] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [buildMismatch, setBuildMismatch] = useState(false);
   // Bumping this re-runs the load effect — the retry button's mechanism.
   const [reloadNonce, setReloadNonce] = useState(0);
 
@@ -238,6 +272,49 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     rankName: "BEGINNER",
     isRankUp: false,
   });
+
+  /**
+   * Thrown when the server reports 409 STALE. Carries the server's view of the
+   * world so the caller can adopt it instead of rolling back — the correct
+   * response to "another tab already did this".
+   */
+  const authedJson = useCallback(
+    async (path: string, init?: RequestInit) => {
+      if (!accessToken) throw new Error("Not authenticated");
+      const res = await fetch(path, {
+        ...init,
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${accessToken}`,
+          ...(init?.headers ?? {}),
+        },
+      });
+
+      // Tripwire: this tab was loaded from one build; the server is now
+      // serving another. Old JS against a locked-down database is the Phase 5
+      // failure mode, and a reload is the entire fix — so say so rather than
+      // letting the user watch writes fail.
+      const serverBuild = res.headers.get("x-app-build");
+      if (
+        serverBuild &&
+        CLIENT_BUILD_ID &&
+        serverBuild !== CLIENT_BUILD_ID
+      ) {
+        setBuildMismatch(true);
+      }
+
+      const data = await res.json().catch(() => null);
+
+      if (res.status === 409 && data?.error === "STALE") {
+        throw new StaleStateError(data.state ?? null);
+      }
+      if (!res.ok || data?.error) {
+        throw new Error(data?.error ?? "Request failed");
+      }
+      return data;
+    },
+    [accessToken]
+  );
 
   // ── Fetch all data from Supabase on login ──
   useEffect(() => {
@@ -273,12 +350,22 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         userTimezone
       );
 
-      // Fetch all tables in parallel
-      const [profileRes, objRes, dhRes, nnRes, logsRes] = await Promise.all([
+      // ── Server-authoritative sync ──
+      //
+      // This replaces the reset that used to run here in the browser. That
+      // block wrote xp, streak, last_habit_reset, per-habit streaks and
+      // daily_logs directly, and it is the single reason those grants cannot
+      // be revoked. The server now owns all of it; the client only reads.
+      //
+      // Everything below this point is a SELECT.
+      const sync = await authedJson("/api/system/sync", {
+        method: "POST",
+        body: JSON.stringify({ timezone: userTimezone }),
+      });
+      if (cancelled) return null;
+
+      const [profileRes, logsRes] = await Promise.all([
         supabase.from("operator_profile").select("*").eq("id", userId).single(),
-        supabase.from("objectives").select("*").eq("user_id", userId).order("created_at", { ascending: true }),
-        supabase.from("daily_habits").select("*").eq("user_id", userId).order("created_at", { ascending: true }),
-        supabase.from("non_negotiables").select("*").eq("user_id", userId).order("created_at", { ascending: true }),
         supabase
           .from("daily_logs")
           .select("*")
@@ -293,128 +380,37 @@ export function EliteProvider({ children }: { children: ReactNode }) {
       // the same transaction that creates the account. The client used to
       // insert it here and discard the error, which turned a username
       // collision into an account with no profile and a permanent spinner.
-      let profile = profileRes.data;
-      if (!profile) {
+      const profileRow = profileRes.data;
+      if (!profileRow) {
         throw new Error(
           "Your profile could not be loaded. If this persists, contact support."
         );
       }
-      if (cancelled) return null;
 
-      if (profile.timezone !== userTimezone) {
-        // Keep timezone fresh so both login recovery and cron align
-        // to the user's local day boundary.
-        await supabase
-          .from("operator_profile")
-          .update({ timezone: userTimezone })
-          .eq("id", userId);
-        profile = { ...profile, timezone: userTimezone };
-      }
+      // Prefer the sync response for anything it owns — it is post-reset,
+      // whereas the profile SELECT can race the reset it just performed.
+      const profile = {
+        ...profileRow,
+        xp: sync.xp,
+        streak: sync.streak,
+        last_habit_reset: sync.lastHabitReset,
+        timezone: sync.timezone ?? userTimezone,
+      };
 
-      let dailyHabitRows = (dhRes.data ?? []) as ResettableHabit[];
-      let nonNegotiableRows = (nnRes.data ?? []) as ResettableHabit[];
-      let logRows = logsRes.data ?? [];
+      const objRes = {
+        data: (sync.objectives ?? []) as {
+          id: string;
+          type: string;
+          title: string;
+          description: string;
+          progress: number;
+          status: string;
+        }[],
+      };
+      const dailyHabitRows = (sync.dailyHabits ?? []) as ResettableHabit[];
+      const nonNegotiableRows = (sync.nonNegotiables ?? []) as ResettableHabit[];
+      const logRows = logsRes.data ?? [];
 
-      const today = toDateStr(new Date(), userTimezone);
-
-      if (profile.last_habit_reset !== today) {
-        const resetPlan = buildResetPlan({
-          today,
-          lastHabitReset: profile.last_habit_reset,
-          xp: profile.xp,
-          nonNegotiables: nonNegotiableRows,
-          dailyHabits: dailyHabitRows,
-        });
-
-        for (const day of resetPlan.days) {
-          // Upsert, not insert: another tab or the nightly cron can archive the
-          // same day concurrently, and (user_id, date) is unique. Losing that
-          // race yields zero rows, hence maybeSingle().
-          const { data: insertedLog } = await supabase
-            .from("daily_logs")
-            .upsert(
-              {
-                user_id: userId,
-                date: day.date,
-                nn_summary: day.nnSummary,
-                habit_summary: day.habitSummary,
-                total_xp_at_time: day.xpAtTime,
-                penalty: day.penalty,
-              },
-              { onConflict: "user_id,date", ignoreDuplicates: true }
-            )
-            .select()
-            .maybeSingle();
-
-          if (insertedLog) {
-            logRows = [insertedLog, ...logRows];
-          }
-        }
-
-        const updatedNonNegotiables = nonNegotiableRows.map((habit) => ({
-          ...habit,
-          completed_today: false,
-          streak: habit.completed_today ? habit.streak + 1 : 0,
-        }));
-        const updatedDailyHabits = dailyHabitRows.map((habit) => ({
-          ...habit,
-          completed_today: false,
-          streak: habit.completed_today ? habit.streak + 1 : 0,
-        }));
-
-        await Promise.all([
-          ...updatedNonNegotiables.map((habit) =>
-            supabase
-              .from("non_negotiables")
-              .update({
-                completed_today: false,
-                streak: habit.streak,
-              })
-              .eq("id", habit.id)
-          ),
-          ...updatedDailyHabits.map((habit) =>
-            supabase
-              .from("daily_habits")
-              .update({
-                completed_today: false,
-                streak: habit.streak,
-              })
-              .eq("id", habit.id)
-          ),
-        ]);
-
-        const yesterday = toDateStr(
-          new Date(Date.now() - 86_400_000),
-          userTimezone
-        );
-        const newGlobalStreak = getUpdatedGlobalStreak({
-          streak: profile.streak,
-          lastCheckIn: profile.last_check_in,
-          timezone: userTimezone,
-          today,
-          yesterday,
-        });
-
-        await supabase
-          .from("operator_profile")
-          .update({
-            xp: resetPlan.finalXp,
-            streak: newGlobalStreak,
-            last_habit_reset: today,
-            timezone: userTimezone,
-          })
-          .eq("id", userId);
-
-        profile = {
-          ...profile,
-          xp: resetPlan.finalXp,
-          streak: newGlobalStreak,
-          last_habit_reset: today,
-          timezone: userTimezone,
-        };
-        dailyHabitRows = updatedDailyHabits;
-        nonNegotiableRows = updatedNonNegotiables;
-      }
 
       // Map DB rows to local types
       const objectives: Objective[] = (objRes.data ?? []).map((r) => ({
@@ -490,32 +486,17 @@ export function EliteProvider({ children }: { children: ReactNode }) {
       });
 
     return () => { cancelled = true; };
-  }, [userId, reloadNonce]);
+    // `authedJson` is keyed on the access token, so this re-runs when the
+    // token refreshes — roughly hourly, and a full reload is the right
+    // response to a new session anyway. It is emphatically *not* keyed on the
+    // `user` object; see the note where `userId` is declared.
+  }, [userId, reloadNonce, authedJson]);
 
   const retryLoad = useCallback(() => {
     setLoadError(null);
     setReloadNonce((n) => n + 1);
   }, []);
 
-  const authedJson = useCallback(
-    async (path: string, init?: RequestInit) => {
-      if (!session?.access_token) throw new Error("Not authenticated");
-      const res = await fetch(path, {
-        ...init,
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${session.access_token}`,
-          ...(init?.headers ?? {}),
-        },
-      });
-      const data = await res.json();
-      if (!res.ok || data?.error) {
-        throw new Error(data?.error ?? "Request failed");
-      }
-      return data;
-    },
-    [session?.access_token]
-  );
 
   const refreshFriendsArena = useCallback(async (silent = false) => {
     if (!userId || !accessToken) {
@@ -638,98 +619,252 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     }
   }, [authedJson, refreshFriendsArena]);
 
-  // ── XP ──
+  // ── XP side effects ──
 
-  const updateXP = useCallback(
-    (amount: number) => {
-      setState((prev) => {
-        const oldData = getLevelData(prev.xp);
-        const newXp = Math.max(0, prev.xp + amount);
-        const newData = getLevelData(newXp);
+  /**
+   * Level-up and rank-up toasts, driven by observed XP rather than by the
+   * writer that caused it.
+   *
+   * This used to live inside `updateXP`, which no UI ever called — so the
+   * toast fired for exactly nothing. On an effect it fires for every XP
+   * change, including the server-confirmed reset penalties, which is where it
+   * always belonged.
+   */
+  const prevXpRef = useRef<number | null>(null);
+  useEffect(() => {
+    const previous = prevXpRef.current;
+    prevXpRef.current = state.xp;
+    if (previous === null || state.xp <= previous) return;
 
-        if (amount > 0) {
-          const isRankUp = newData.rankName !== oldData.rankName;
-          const isLevelUp = newData.currentLevel > oldData.currentLevel;
-          if (isLevelUp || isRankUp) {
-            setLevelUpToast({
-              show: true,
-              level: newData.currentLevel,
-              rankName: newData.rankName,
-              isRankUp,
-            });
-            setTimeout(
-              () => setLevelUpToast((t) => ({ ...t, show: false })),
-              4000
-            );
-          }
+    const before = getLevelData(previous);
+    const after = getLevelData(state.xp);
+    const isRankUp = after.rankName !== before.rankName;
+    const isLevelUp = after.currentLevel > before.currentLevel;
+    if (!isLevelUp && !isRankUp) return;
+
+    setLevelUpToast({
+      show: true,
+      level: after.currentLevel,
+      rankName: after.rankName,
+      isRankUp,
+    });
+    const timer = setTimeout(
+      () => setLevelUpToast((t) => ({ ...t, show: false })),
+      4000
+    );
+    return () => clearTimeout(timer);
+  }, [state.xp]);
+
+  /**
+   * The server owns the toggle. The client sends intent and reconciles.
+   *
+   * Three outcomes, and the distinction between them matters:
+   *   200 — adopt the server's numbers rather than trusting local arithmetic,
+   *         so client and server cannot drift.
+   *   409 — another writer got there first. Adopt their state; do *not* roll
+   *         back, because the user's intent already holds.
+   *   else — a real failure. Roll back everything the optimistic update
+   *         touched, including lastCheckIn.
+   */
+  const runHabitToggle = useCallback(
+    async (params: {
+      kind: HabitKind;
+      id: string;
+      completing: boolean;
+      prevLastCheckIn: string | null;
+    }) => {
+      const { kind, id, completing, prevLastCheckIn } = params;
+      const listKey = kind === "daily" ? "dailyHabits" : "nonNegotiables";
+
+      try {
+        const res = await authedJson("/api/economy/habit/toggle", {
+          method: "POST",
+          body: JSON.stringify({ kind, id, completing }),
+        });
+
+        setState((prev) => ({
+          ...prev,
+          xp: res.xp,
+          streak: res.streak,
+          lastCheckIn: res.lastCheckIn,
+          [listKey]: prev[listKey].map((h) =>
+            h.id === id
+              ? { ...h, completedToday: res.habit.completedToday, streak: res.habit.streak }
+              : h
+          ),
+        }));
+      } catch (error) {
+        if (error instanceof StaleStateError) {
+          const s = error.state;
+          setState((prev) => ({
+            ...prev,
+            xp: s?.xp ?? prev.xp,
+            streak: s?.streak ?? prev.streak,
+            lastCheckIn: s?.lastCheckIn ?? prev.lastCheckIn,
+            [listKey]: prev[listKey].map((h) =>
+              s?.habit && h.id === id
+                ? { ...h, completedToday: s.habit.completedToday, streak: s.habit.streak }
+                : h
+            ),
+          }));
+          return;
         }
 
-        if (user) patchProfile(user.id, { xp: newXp });
-        return { ...prev, xp: newXp };
-      });
-      if (amount > 0) {
-        showToast("gain", amount, `+${amount} XP`);
-      } else if (amount < 0) {
-        showToast("loss", Math.abs(amount), `${amount} XP`);
+        setState((prev) => ({
+          ...prev,
+          xp: applyXpDelta(prev.xp, completing ? -xpForHabitKind(kind) : xpForHabitKind(kind)),
+          lastCheckIn: prevLastCheckIn,
+          [listKey]: prev[listKey].map((h) =>
+            h.id === id ? { ...h, completedToday: !completing } : h
+          ),
+        }));
+        showToast("loss", 0, "SYNC_FAILED — reverted");
+      } finally {
+        pendingToggles.current.delete(id);
       }
     },
-    [showToast, user]
+    [authedJson, showToast]
   );
+
 
   // ── Daily Habits ──
 
-  const addDailyHabit = useCallback(
-    (title: string) => {
-      if (!user) return;
-      const tempId = Date.now().toString();
+  /**
+   * Habit and non-negotiable CRUD, shared by both lists.
+   *
+   * Titles and rows stay on the browser client under RLS — only the columns
+   * that affect rank moved to the server. What changed here is error handling:
+   * every one of these used to end in `.then(() => {})`, so a failed write was
+   * completely silent. A delete that never reached the database still vanished
+   * from the UI and reappeared on the next load.
+   */
+  const addHabitRow = useCallback(
+    async (kind: HabitKind, title: string): Promise<string | null> => {
+      if (!userId) return "Not signed in";
+      const table = kind === "daily" ? "daily_habits" : "non_negotiables";
+      const listKey = kind === "daily" ? "dailyHabits" : "nonNegotiables";
+      // randomUUID, not Date.now(): two adds inside the same millisecond
+      // produced identical temp ids, and every later edit then targeted both.
+      const tempId = crypto.randomUUID();
 
       setState((prev) => ({
         ...prev,
-        dailyHabits: [
-          ...prev.dailyHabits,
+        [listKey]: [
+          ...prev[listKey],
           { id: tempId, title, completedToday: false, streak: 0 },
         ],
       }));
 
-      // Insert to Supabase and update local ID
-      supabase
-        .from("daily_habits")
-        .insert({ user_id: user.id, title })
+      const { data, error } = await supabase
+        .from(table)
+        .insert({ user_id: userId, title })
         .select()
-        .single()
-        .then(({ data }) => {
-          if (data) {
-            setState((prev) => ({
-              ...prev,
-              dailyHabits: prev.dailyHabits.map((h) =>
-                h.id === tempId ? { ...h, id: data.id } : h
-              ),
-            }));
-          }
-        });
+        .single();
+
+      if (error || !data) {
+        // Remove the optimistic row rather than leaving it stranded with a
+        // temp id that matches nothing in the database — the old behaviour,
+        // which made every subsequent edit and delete a silent no-op.
+        setState((prev) => ({
+          ...prev,
+          [listKey]: prev[listKey].filter((h) => h.id !== tempId),
+        }));
+        const message = error?.message ?? "Could not save that.";
+        showToast("loss", 0, "SAVE_FAILED — reverted");
+        return message;
+      }
+
+      setState((prev) => ({
+        ...prev,
+        [listKey]: prev[listKey].map((h) =>
+          h.id === tempId ? { ...h, id: data.id } : h
+        ),
+      }));
+      return null;
     },
-    [user]
+    [showToast, userId]
+  );
+
+  const editHabitRow = useCallback(
+    async (kind: HabitKind, id: string, title: string): Promise<string | null> => {
+      if (!userId) return "Not signed in";
+      const table = kind === "daily" ? "daily_habits" : "non_negotiables";
+      const listKey = kind === "daily" ? "dailyHabits" : "nonNegotiables";
+
+      const previous = (kind === "daily" ? state.dailyHabits : state.nonNegotiables)
+        .find((h) => h.id === id)?.title;
+
+      setState((prev) => ({
+        ...prev,
+        [listKey]: prev[listKey].map((h) => (h.id === id ? { ...h, title } : h)),
+      }));
+
+      const { error } = await supabase
+        .from(table)
+        .update({ title })
+        .eq("id", id)
+        .eq("user_id", userId);
+
+      if (error) {
+        setState((prev) => ({
+          ...prev,
+          [listKey]: prev[listKey].map((h) =>
+            h.id === id && previous !== undefined ? { ...h, title: previous } : h
+          ),
+        }));
+        showToast("loss", 0, "EDIT_FAILED — reverted");
+        return error.message;
+      }
+      return null;
+    },
+    [showToast, state.dailyHabits, state.nonNegotiables, userId]
+  );
+
+  const deleteHabitRow = useCallback(
+    async (kind: HabitKind, id: string): Promise<string | null> => {
+      if (!userId) return "Not signed in";
+      const table = kind === "daily" ? "daily_habits" : "non_negotiables";
+      const listKey = kind === "daily" ? "dailyHabits" : "nonNegotiables";
+
+      const removed = (kind === "daily" ? state.dailyHabits : state.nonNegotiables)
+        .find((h) => h.id === id);
+
+      setState((prev) => ({
+        ...prev,
+        [listKey]: prev[listKey].filter((h) => h.id !== id),
+      }));
+
+      const { error } = await supabase
+        .from(table)
+        .delete()
+        .eq("id", id)
+        .eq("user_id", userId);
+
+      if (error) {
+        if (removed) {
+          setState((prev) => ({ ...prev, [listKey]: [...prev[listKey], removed] }));
+        }
+        showToast("loss", 0, "DELETE_FAILED — restored");
+        return error.message;
+      }
+      return null;
+    },
+    [showToast, state.dailyHabits, state.nonNegotiables, userId]
+  );
+
+  const addDailyHabit = useCallback(
+    (title: string) => addHabitRow("daily", title),
+    [addHabitRow]
   );
 
   const editDailyHabit = useCallback(
-    (id: string, title: string) => {
-      if (!user) return;
-      setState((prev) => ({
-        ...prev,
-        dailyHabits: prev.dailyHabits.map((h) => h.id === id ? { ...h, title } : h),
-      }));
-      supabase.from("daily_habits").update({ title }).eq("id", id).then(() => {});
-    },
-    [user]
+    (id: string, title: string) => editHabitRow("daily", id, title),
+    [editHabitRow]
   );
 
   const deleteDailyHabit = useCallback(
-    (id: string) => {
-      if (!user) return;
-      setState((prev) => ({ ...prev, dailyHabits: prev.dailyHabits.filter((h) => h.id !== id) }));
-      supabase.from("daily_habits").delete().eq("id", id).then(() => {});
-    },
-    [user]
+    (id: string) => deleteHabitRow("daily", id),
+    [deleteHabitRow]
   );
 
   const toggleDailyHabit = useCallback(
@@ -748,15 +883,18 @@ export function EliteProvider({ children }: { children: ReactNode }) {
       });
 
       pendingToggles.current.add(id);
+      // Captured before the optimistic write so a rollback can restore it.
+      // Previously the rollback reverted xp and the habit but left
+      // lastCheckIn moved, silently corrupting the streak calculation.
+      const prevLastCheckIn = state.lastCheckIn;
 
       // Optimistic update
       setState((prev) => {
         const h = prev.dailyHabits.find((h) => h.id === id);
         if (!h) return prev;
-        const newXp = applyXpDelta(prev.xp, xpDelta);
         return {
           ...prev,
-          xp: newXp,
+          xp: applyXpDelta(prev.xp, xpDelta),
           lastCheckIn: completing ? new Date().toISOString() : prev.lastCheckIn,
           dailyHabits: prev.dailyHabits.map((h) =>
             h.id === id ? { ...h, completedToday: completing } : h
@@ -771,88 +909,33 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         completing ? `+${XP_PER_DAILY_HABIT} XP` : `-${XP_PER_DAILY_HABIT} XP`
       );
 
-      // Persist to DB — rollback on failure
-      if (user) {
-        Promise.all([
-          supabase.from("daily_habits").update({ completed_today: completing }).eq("id", id),
-          supabase.from("operator_profile").update({
-            xp: applyXpDelta(state.xp, xpDelta),
-            ...(completing ? { last_check_in: new Date().toISOString() } : {}),
-          }).eq("id", user.id),
-        ]).then(([habitRes, profileRes]) => {
-          pendingToggles.current.delete(id);
-          if (habitRes.error || profileRes.error) {
-            setState((prev) => ({
-              ...prev,
-              xp: applyXpDelta(prev.xp, -xpDelta),
-              dailyHabits: prev.dailyHabits.map((h) =>
-                h.id === id ? { ...h, completedToday: !completing } : h
-              ),
-            }));
-            showToast("loss", 0, "SYNC_FAILED — reverted");
-          }
-        });
-      } else {
-        pendingToggles.current.delete(id);
-      }
+      void runHabitToggle({
+        kind: "daily",
+        id,
+        completing,
+        prevLastCheckIn,
+      });
     },
-    [showToast, state.dailyHabits, state.xp, user]
+    [runHabitToggle, showToast, state.dailyHabits, state.lastCheckIn, state.xp]
   );
 
   // ── Non-Negotiables ──
 
   const addNonNegotiable = useCallback(
-    (title: string) => {
-      if (!user) return;
-      const tempId = Date.now().toString();
-
-      setState((prev) => ({
-        ...prev,
-        nonNegotiables: [
-          ...prev.nonNegotiables,
-          { id: tempId, title, completedToday: false, streak: 0 },
-        ],
-      }));
-
-      supabase
-        .from("non_negotiables")
-        .insert({ user_id: user.id, title })
-        .select()
-        .single()
-        .then(({ data }) => {
-          if (data) {
-            setState((prev) => ({
-              ...prev,
-              nonNegotiables: prev.nonNegotiables.map((h) =>
-                h.id === tempId ? { ...h, id: data.id } : h
-              ),
-            }));
-          }
-        });
-    },
-    [user]
+    (title: string) => addHabitRow("non-negotiable", title),
+    [addHabitRow]
   );
 
   const editNonNegotiable = useCallback(
-    (id: string, title: string) => {
-      if (!user) return;
-      setState((prev) => ({
-        ...prev,
-        nonNegotiables: prev.nonNegotiables.map((h) => h.id === id ? { ...h, title } : h),
-      }));
-      supabase.from("non_negotiables").update({ title }).eq("id", id).then(() => {});
-    },
-    [user]
+    (id: string, title: string) => editHabitRow("non-negotiable", id, title),
+    [editHabitRow]
   );
 
   const deleteNonNegotiable = useCallback(
-    (id: string) => {
-      if (!user) return;
-      setState((prev) => ({ ...prev, nonNegotiables: prev.nonNegotiables.filter((h) => h.id !== id) }));
-      supabase.from("non_negotiables").delete().eq("id", id).then(() => {});
-    },
-    [user]
+    (id: string) => deleteHabitRow("non-negotiable", id),
+    [deleteHabitRow]
   );
+
 
   const toggleNonNegotiable = useCallback(
     (id: string) => {
@@ -869,15 +952,15 @@ export function EliteProvider({ children }: { children: ReactNode }) {
       });
 
       pendingToggles.current.add(id);
+      const prevLastCheckIn = state.lastCheckIn;
 
       // Optimistic update
       setState((prev) => {
         const h = prev.nonNegotiables.find((h) => h.id === id);
         if (!h) return prev;
-        const newXp = applyXpDelta(prev.xp, xpDelta);
         return {
           ...prev,
-          xp: newXp,
+          xp: applyXpDelta(prev.xp, xpDelta),
           lastCheckIn: completing ? new Date().toISOString() : prev.lastCheckIn,
           nonNegotiables: prev.nonNegotiables.map((h) =>
             h.id === id ? { ...h, completedToday: completing } : h
@@ -894,40 +977,30 @@ export function EliteProvider({ children }: { children: ReactNode }) {
           : `-${XP_PER_NON_NEGOTIABLE} XP`
       );
 
-      // Persist to DB — rollback on failure
-      if (user) {
-        Promise.all([
-          supabase.from("non_negotiables").update({ completed_today: completing }).eq("id", id),
-          supabase.from("operator_profile").update({
-            xp: applyXpDelta(state.xp, xpDelta),
-            ...(completing ? { last_check_in: new Date().toISOString() } : {}),
-          }).eq("id", user.id),
-        ]).then(([habitRes, profileRes]) => {
-          pendingToggles.current.delete(id);
-          if (habitRes.error || profileRes.error) {
-            setState((prev) => ({
-              ...prev,
-              xp: applyXpDelta(prev.xp, -xpDelta),
-              nonNegotiables: prev.nonNegotiables.map((h) =>
-                h.id === id ? { ...h, completedToday: !completing } : h
-              ),
-            }));
-            showToast("loss", 0, "SYNC_FAILED — reverted");
-          }
-        });
-      } else {
-        pendingToggles.current.delete(id);
-      }
+      void runHabitToggle({
+        kind: "non-negotiable",
+        id,
+        completing,
+        prevLastCheckIn,
+      });
     },
-    [showToast, state.nonNegotiables, state.xp, user]
+    [
+      runHabitToggle,
+      showToast,
+      state.lastCheckIn,
+      state.nonNegotiables,
+      state.xp,
+    ]
   );
 
   // ── Objectives ──
 
   const addObjective = useCallback(
-    (obj: Omit<Objective, "id" | "progress" | "status">) => {
-      if (!user) return;
-      const tempId = Date.now().toString();
+    async (
+      obj: Omit<Objective, "id" | "progress" | "status">
+    ): Promise<string | null> => {
+      if (!userId) return "Not signed in";
+      const tempId = crypto.randomUUID();
 
       setState((prev) => ({
         ...prev,
@@ -937,110 +1010,161 @@ export function EliteProvider({ children }: { children: ReactNode }) {
         ],
       }));
 
-      supabase
+      const { data, error } = await supabase
         .from("objectives")
-        .insert({ user_id: user.id, type: obj.type, title: obj.title, description: obj.description })
+        .insert({
+          user_id: userId,
+          type: obj.type,
+          title: obj.title,
+          description: obj.description,
+        })
         .select()
-        .single()
-        .then(({ data }) => {
-          if (data) {
-            setState((prev) => ({
-              ...prev,
-              objectives: prev.objectives.map((o) =>
-                o.id === tempId ? { ...o, id: data.id } : o
-              ),
-            }));
-          }
-        });
+        .single();
+
+      if (error || !data) {
+        setState((prev) => ({
+          ...prev,
+          objectives: prev.objectives.filter((o) => o.id !== tempId),
+        }));
+        const message = error?.message ?? "Could not save that objective.";
+        showToast("loss", 0, "SAVE_FAILED — reverted");
+        return message;
+      }
+
+      setState((prev) => ({
+        ...prev,
+        objectives: prev.objectives.map((o) =>
+          o.id === tempId ? { ...o, id: data.id } : o
+        ),
+      }));
+      return null;
     },
-    [user]
+    [showToast, userId]
   );
 
+  /**
+   * Progress is now the server's decision.
+   *
+   * The client sends an id and nothing else; the step size and the 500/200
+   * completion awards live behind the API. A double-tap that previously
+   * awarded twice now loses the compare-and-swap and comes back 409, and the
+   * loser adopts server truth rather than rolling anything back.
+   */
   const incrementObjectiveProgress = useCallback(
-    (id: string) => {
-      setState((prev) => {
-        const obj = prev.objectives.find((o) => o.id === id);
-        if (!obj || obj.status === "Completed") return prev;
+    async (id: string): Promise<string | null> => {
+      const before = state.objectives.find((o) => o.id === id);
+      if (!before || before.status === "Completed") return null;
 
-        const {
-          nextProgress,
-          nextStatus,
-          xpAwarded,
-          nextXp,
-        } = computeObjectiveProgress({
-          currentProgress: obj.progress,
-          currentStatus: obj.status,
-          type: obj.type,
-          currentXp: prev.xp,
+      try {
+        const res = await authedJson("/api/economy/objective/progress", {
+          method: "POST",
+          body: JSON.stringify({ id }),
         });
 
-        // Async DB update
-        if (user) {
-          supabase
-            .from("objectives")
-            .update({
-              progress: nextProgress,
-              ...(xpAwarded > 0 ? { status: nextStatus } : {}),
-            })
-            .eq("id", id)
-            .then(() => {});
-          if (xpAwarded > 0) {
-            patchProfile(user.id, { xp: nextXp });
-          }
-        }
-
-        return {
+        setState((prev) => ({
           ...prev,
-          xp: nextXp,
+          xp: res.xp,
           objectives: prev.objectives.map((o) =>
             o.id === id
-              ? { ...o, progress: nextProgress, status: nextStatus }
+              ? { ...o, progress: res.objective.progress, status: res.objective.status }
               : o
           ),
-        };
-      });
+        }));
 
-      // Toast
-      const obj = state.objectives.find((o) => o.id === id);
-      if (obj) {
-        const { xpAwarded } = computeObjectiveProgress({
-          currentProgress: obj.progress,
-          currentStatus: obj.status,
-          type: obj.type,
-          currentXp: state.xp,
-        });
-        if (xpAwarded > 0) {
+        if (res.xpAwarded > 0) {
           const label =
-            obj.type === "north-star"
+            before.type === "north-star"
               ? "NORTH_STAR_ACHIEVED"
               : "SPRINT_COMPLETE";
-          showToast("gain", xpAwarded, `${label}: +${xpAwarded} XP`);
+          showToast("gain", res.xpAwarded, `${label}: +${res.xpAwarded} XP`);
         }
+        return null;
+      } catch (error) {
+        if (error instanceof StaleStateError) {
+          const s = error.state;
+          setState((prev) => ({
+            ...prev,
+            xp: s?.xp ?? prev.xp,
+            objectives: prev.objectives.map((o) =>
+              s?.objective && o.id === id
+                ? { ...o, progress: s.objective.progress, status: s.objective.status }
+                : o
+            ),
+          }));
+          return null;
+        }
+        return error instanceof Error ? error.message : "Could not update progress.";
       }
     },
-    [showToast, state.objectives, state.xp, user]
+    [authedJson, showToast, state.objectives]
   );
 
   const editObjective = useCallback(
-    (id: string, data: { title: string; description: string }) => {
-      if (!user) return;
+    async (
+      id: string,
+      data: { title: string; description: string }
+    ): Promise<string | null> => {
+      if (!userId) return "Not signed in";
+      const previous = state.objectives.find((o) => o.id === id);
+
       setState((prev) => ({
         ...prev,
-        objectives: prev.objectives.map((o) => o.id === id ? { ...o, ...data } : o),
+        objectives: prev.objectives.map((o) =>
+          o.id === id ? { ...o, ...data } : o
+        ),
       }));
-      supabase.from("objectives").update({ title: data.title, description: data.description }).eq("id", id).then(() => {});
+
+      const { error } = await supabase
+        .from("objectives")
+        .update({ title: data.title, description: data.description })
+        .eq("id", id)
+        .eq("user_id", userId);
+
+      if (error) {
+        setState((prev) => ({
+          ...prev,
+          objectives: prev.objectives.map((o) =>
+            o.id === id && previous
+              ? { ...o, title: previous.title, description: previous.description }
+              : o
+          ),
+        }));
+        showToast("loss", 0, "EDIT_FAILED — reverted");
+        return error.message;
+      }
+      return null;
     },
-    [user]
+    [showToast, state.objectives, userId]
   );
 
   const deleteObjective = useCallback(
-    (id: string) => {
-      if (!user) return;
-      setState((prev) => ({ ...prev, objectives: prev.objectives.filter((o) => o.id !== id) }));
-      supabase.from("objectives").delete().eq("id", id).then(() => {});
+    async (id: string): Promise<string | null> => {
+      if (!userId) return "Not signed in";
+      const removed = state.objectives.find((o) => o.id === id);
+
+      setState((prev) => ({
+        ...prev,
+        objectives: prev.objectives.filter((o) => o.id !== id),
+      }));
+
+      const { error } = await supabase
+        .from("objectives")
+        .delete()
+        .eq("id", id)
+        .eq("user_id", userId);
+
+      if (error) {
+        if (removed) {
+          setState((prev) => ({ ...prev, objectives: [...prev.objectives, removed] }));
+        }
+        showToast("loss", 0, "DELETE_FAILED — restored");
+        return error.message;
+      }
+      return null;
     },
-    [user]
+    [showToast, state.objectives, userId]
   );
+
 
   const levelData = getLevelData(state.xp);
 
@@ -1050,8 +1174,8 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     arenaLoading,
     loadError,
     retryLoad,
+    buildMismatch,
     levelData,
-    updateXP,
     addObjective,
     incrementObjectiveProgress,
     deleteObjective,
