@@ -198,6 +198,14 @@ async function patchProfile(
 
 export function EliteProvider({ children }: { children: ReactNode }) {
   const { user, session } = useAuth();
+  // Depend on the *id*, never the `user` object. AuthContext calls
+  // `setUser(s?.user ?? null)` on every `onAuthStateChange` event, which mints
+  // a fresh object even when the signed-in operator has not changed. Effects
+  // keyed on `user` therefore re-ran on every auth event, and because each
+  // re-run issues Supabase requests that themselves settle the auth state,
+  // the two fed each other into a permanent request storm.
+  const userId = user?.id ?? null;
+  const accessToken = session?.access_token ?? null;
   const [state, setState] = useState<EliteState>(DEFAULT_STATE);
   const [loading, setLoading] = useState(true);
   const [arenaLoading, setArenaLoading] = useState(false);
@@ -228,7 +236,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
 
-    if (!user) {
+    if (!userId) {
       queueMicrotask(() => {
         if (cancelled) return;
         setState(DEFAULT_STATE);
@@ -249,7 +257,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     // owns every setState — including the `finally` that clears the loading
     // flag on every exit path.
     async function fetchSystemState(): Promise<EliteState | null> {
-      const userId = user!.id;
+      if (!userId) return null;
       // Log dates are written in the user's local day, so the retention window
       // has to be measured there too — otherwise users west of UTC lose a day.
       const userTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -475,7 +483,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
       });
 
     return () => { cancelled = true; };
-  }, [user, reloadNonce]);
+  }, [userId, reloadNonce]);
 
   const retryLoad = useCallback(() => {
     setLoadError(null);
@@ -503,7 +511,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
   );
 
   const refreshFriendsArena = useCallback(async (silent = false) => {
-    if (!user || !session?.access_token) {
+    if (!userId || !accessToken) {
       setState((prev) => ({
         ...prev,
         friendsInbound: [],
@@ -540,12 +548,12 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     } finally {
       if (!silent) setArenaLoading(false);
     }
-  }, [authedJson, session?.access_token, user]);
+  }, [authedJson, accessToken, userId]);
 
   useEffect(() => {
-    if (!user || loading) return;
+    if (!userId || loading) return;
     refreshFriendsArena();
-  }, [loading, refreshFriendsArena, state.logs.length, state.streak, user]);
+  }, [loading, refreshFriendsArena, state.logs.length, state.streak, userId]);
 
   const showToast = useCallback(
     (type: "gain" | "loss", amount: number, message: string) => {
