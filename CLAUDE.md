@@ -89,6 +89,12 @@ complete, complete an objective, or forge a friendship **all fail**.
 Treat as current intent unless the user says otherwise.
 
 - Arena is **friends-based**, not anonymous. Do not reintroduce Ghost mode.
+- **No CAPTCHA.** Decided on August 14, 2026, on simplicity grounds, with the
+  tradeoff stated: signup is scriptable, so bot registration and email-sender
+  abuse are bounded only by rate limiting. Do not add Turnstile or hCaptcha
+  back without being asked. The consequence is that the Phase 7 rate limiter
+  and Supabase's own email caps are the whole defence — treat them as required,
+  not optional.
 - Username is **required at signup**, 3–24 chars, `[a-z0-9_]`. Enforced in the
   UI, in `/api/auth/check-username`, and by a CHECK constraint — the database is
   the authority.
@@ -373,9 +379,9 @@ A schema change usually needs matching updates in
   production. Until Resend (or equivalent) is attached, confirmation and
   recovery emails are unreliable — which makes the recovery flow only as good as
   the mail behind it.
-- **No CAPTCHA.** Public signup plus working SMTP without one is an open email
-  relay pointed at your own domain reputation. The CSP already allows Turnstile;
-  the widget itself is not wired up.
+- **No CAPTCHA, by decision** — see §3. This is the reason the Phase 7 rate
+  limiter is load-bearing rather than nice to have: it is the only thing
+  standing between a script and the signup endpoint.
 - Account rules live in [auth-rules.ts](src/lib/auth-rules.ts) —
   `USERNAME_PATTERN` and `MIN_PASSWORD_LENGTH` (10, raised from 6). They mirror
   the database CHECK constraint and `auth.minimum_password_length`
@@ -460,8 +466,6 @@ Also fixed along the way: the auth-state request storm (§5).
    - Mirror the `config.toml` changes into the dashboard: confirmations on,
      password length 10, `site_url` + `additional_redirect_urls` (production,
      Vercel preview wildcard, localhost), `max_frequency`, `email_sent`.
-   - **CAPTCHA** (Turnstile). The CSP allowance is already in `next.config.ts`;
-     the `[auth.captcha]` block is stubbed and the widget is unwired.
    - Verify a real signup → confirm → login, and a real forgot → reset → login.
      The flows are verified against Supabase as far as `/auth/v1/recover`
      returning 200; the leg through an actual inbox is not.

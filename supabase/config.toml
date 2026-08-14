@@ -192,8 +192,8 @@ password_requirements = ""
 # Number of emails that can be sent per hour. Requires auth.email.smtp to be enabled.
 # 2/hour is a development default: with confirmations on it is breached by three
 # people signing up at once. Raised for real SMTP. This is a project-wide
-# ceiling, not per-user — CAPTCHA and the Phase 7 rate limiter are what stop one
-# address from consuming it.
+# ceiling, not per-user, and there is no CAPTCHA by decision — so the Phase 7
+# rate limiter is the only thing stopping one caller from consuming all of it.
 email_sent = 30
 # Number of SMS messages that can be sent per hour. Requires auth.sms to be enabled.
 sms_sent = 30
