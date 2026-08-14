@@ -3,10 +3,27 @@
 import { useState, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { useAuth } from "@/context/AuthContext";
+import {
+  MIN_PASSWORD_LENGTH,
+  USERNAME_PATTERN,
+  USERNAME_RULE_TEXT,
+} from "@/lib/auth-rules";
+
+type Mode = "login" | "register" | "reset";
+
+/**
+ * Shown whether or not the address has an account.
+ *
+ * A message that distinguishes the two turns this form into an oracle for
+ * which addresses are registered, which is worth more to an attacker than it
+ * is to the operator who mistyped their own email.
+ */
+const RESET_SENT_MESSAGE =
+  "If that email has an account, a reset link is on its way. Check your inbox.";
 
 export default function OperatorLogin() {
-  const { signIn, signUp } = useAuth();
-  const [mode, setMode] = useState<"login" | "register">("login");
+  const { signIn, signUp, requestPasswordReset, resendConfirmation } = useAuth();
+  const [mode, setMode] = useState<Mode>("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [username, setUsername] = useState("");
@@ -14,9 +31,33 @@ export default function OperatorLogin() {
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState<string | null>(null);
   const passwordRef = useRef<HTMLInputElement>(null);
-  const usernamePattern = /^[a-z0-9_]{3,24}$/;
   const usernameInvalid =
-    mode === "register" && username.length > 0 && !usernamePattern.test(username);
+    mode === "register" && username.length > 0 && !USERNAME_PATTERN.test(username);
+
+  const switchMode = (next: Mode) => {
+    setMode(next);
+    setError(null);
+    setSuccess(null);
+    setUsername("");
+    setPassword("");
+  };
+
+  const handleResend = async () => {
+    setError(null);
+    setSuccess(null);
+    if (!email) {
+      setError("Enter your email address first.");
+      return;
+    }
+    setLoading(true);
+    await resendConfirmation(email);
+    // Same reasoning as the reset message: the outcome must not reveal whether
+    // the address exists or is already confirmed.
+    setSuccess(
+      "If that email needs confirming, another link is on its way."
+    );
+    setLoading(false);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -24,12 +65,29 @@ export default function OperatorLogin() {
     setSuccess(null);
     setLoading(true);
 
+    if (mode === "reset") {
+      const err = await requestPasswordReset(email);
+      // Errors are deliberately swallowed into the same message. The only
+      // failures Supabase reports here are rate limiting and malformed input,
+      // and reporting either separately would still separate "sent" from
+      // "not sent", which is the distinction being hidden.
+      if (err) console.error("[PASSWORD_RESET_REQUEST_FAILURE]", err);
+      setSuccess(RESET_SENT_MESSAGE);
+      setLoading(false);
+      return;
+    }
+
     if (mode === "login") {
       const err = await signIn(email, password);
       if (err) setError(err);
     } else {
-      if (!usernamePattern.test(username)) {
-        setError("Username must be 3-24 chars: lowercase letters, numbers, underscore.");
+      if (!USERNAME_PATTERN.test(username)) {
+        setError(`Username must be ${USERNAME_RULE_TEXT}.`);
+        setLoading(false);
+        return;
+      }
+      if (password.length < MIN_PASSWORD_LENGTH) {
+        setError(`Password must be at least ${MIN_PASSWORD_LENGTH} characters.`);
         setLoading(false);
         return;
       }
@@ -107,7 +165,11 @@ export default function OperatorLogin() {
               textTransform: "uppercase",
             }}
           >
-            Sign In
+            {mode === "login"
+              ? "Sign In"
+              : mode === "register"
+                ? "Create Account"
+                : "Reset Password"}
           </p>
         </div>
 
@@ -132,12 +194,12 @@ export default function OperatorLogin() {
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === "Enter") {
+                if (e.key === "Enter" && mode !== "reset") {
                   e.preventDefault();
                   passwordRef.current?.focus();
                 }
               }}
-              enterKeyHint="next"
+              enterKeyHint={mode === "reset" ? "go" : "next"}
               placeholder="you@example.com"
               required
               autoComplete="email"
@@ -198,11 +260,12 @@ export default function OperatorLogin() {
                   color: usernameInvalid ? "#F43F5E" : "#888",
                 }}
               >
-                3-24 chars: lowercase letters, numbers, underscore
+                {USERNAME_RULE_TEXT}
               </p>
             </div>
           )}
 
+          {mode !== "reset" && (
           <div style={{ marginBottom: "1.5rem" }}>
             <label
               style={{
@@ -223,9 +286,12 @@ export default function OperatorLogin() {
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               enterKeyHint="go"
-              placeholder="••••••••"
+              placeholder="••••••••••"
               required
-              minLength={6}
+              // Only binds when a password is being *set*. Existing operators
+              // signed up under the old 6-character minimum and must still be
+              // able to type their current password to log in.
+              minLength={mode === "register" ? MIN_PASSWORD_LENGTH : undefined}
               autoComplete={mode === "login" ? "current-password" : "new-password"}
               style={{
                 width: "100%",
@@ -239,7 +305,19 @@ export default function OperatorLogin() {
                 boxSizing: "border-box",
               }}
             />
+            {mode === "register" && (
+              <p
+                style={{
+                  marginTop: "0.4rem",
+                  fontSize: "0.65rem",
+                  color: "#888",
+                }}
+              >
+                At least {MIN_PASSWORD_LENGTH} characters
+              </p>
+            )}
           </div>
+          )}
 
           <AnimatePresence mode="wait">
             {error && (
@@ -296,14 +374,37 @@ export default function OperatorLogin() {
             }}
           >
             {loading
-              ? "SIGNING IN..."
+              ? mode === "login"
+                ? "SIGNING IN..."
+                : mode === "register"
+                  ? "CREATING..."
+                  : "SENDING..."
               : mode === "login"
                 ? "SIGN IN"
-                : "CREATE ACCOUNT"}
+                : mode === "register"
+                  ? "CREATE ACCOUNT"
+                  : "SEND RESET LINK"}
           </button>
         </form>
 
-        {/* Toggle login/register */}
+        {mode === "login" && (
+          <p
+            style={{
+              textAlign: "center",
+              marginTop: "1rem",
+              fontSize: "0.75rem",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => switchMode("reset")}
+              style={linkButton}
+            >
+              Forgot your password?
+            </button>
+          </p>
+        )}
+
         <p
           style={{
             textAlign: "center",
@@ -312,30 +413,78 @@ export default function OperatorLogin() {
             color: "#888",
           }}
         >
-          {mode === "login" ? "Don't have an account? " : "Already have an account? "}
-          <button
-            type="button"
-            onClick={() => {
-              setMode(mode === "login" ? "register" : "login");
-              setError(null);
-              setSuccess(null);
-              setUsername("");
-            }}
+          {mode === "register" ? (
+            <>
+              Already have an account?{" "}
+              <button
+                type="button"
+                onClick={() => switchMode("login")}
+                style={linkButton}
+              >
+                Log in
+              </button>
+            </>
+          ) : mode === "reset" ? (
+            <button
+              type="button"
+              onClick={() => switchMode("login")}
+              style={linkButton}
+            >
+              Back to sign in
+            </button>
+          ) : (
+            <>
+              Don&apos;t have an account?{" "}
+              <button
+                type="button"
+                onClick={() => switchMode("register")}
+                style={linkButton}
+              >
+                Register
+              </button>
+            </>
+          )}
+        </p>
+
+        {/*
+          Email confirmation is being turned on, and the link expires. Without
+          a way to ask for another one, an operator whose link lapsed has an
+          account they can neither use nor re-register with — the address is
+          taken. This is the single most common support request once
+          confirmations are enabled.
+        */}
+        {mode === "login" && (
+          <p
             style={{
-              background: "none",
-              border: "none",
-              color: "#8B5CF6",
-              fontWeight: 600,
-              cursor: "pointer",
-              fontSize: "0.75rem",
-              textDecoration: "underline",
-              textUnderlineOffset: "2px",
+              textAlign: "center",
+              marginTop: "0.75rem",
+              fontSize: "0.7rem",
+              color: "#666",
             }}
           >
-            {mode === "login" ? "Register" : "Log in"}
-          </button>
-        </p>
+            <button
+              type="button"
+              onClick={handleResend}
+              disabled={loading}
+              style={{ ...linkButton, color: "#666", fontSize: "0.7rem" }}
+            >
+              Resend confirmation email
+            </button>
+          </p>
+        )}
       </div>
     </div>
   );
 }
+
+const linkButton: React.CSSProperties = {
+  background: "none",
+  border: "none",
+  padding: 0,
+  color: "#8B5CF6",
+  fontWeight: 600,
+  cursor: "pointer",
+  fontSize: "0.75rem",
+  textDecoration: "underline",
+  textUnderlineOffset: "2px",
+};

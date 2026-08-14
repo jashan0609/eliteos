@@ -32,7 +32,13 @@ const nextConfig: NextConfig = {
             key: "Content-Security-Policy",
             value: [
               "default-src 'self'",
-              "script-src 'self' 'unsafe-inline'",
+              // challenges.cloudflare.com is Turnstile. A CSP violation shows
+              // up only in the browser console — the widget simply never
+              // renders and signup stops working with no server-side signal —
+              // so the allowance ships ahead of the widget rather than being
+              // discovered after it.
+              "script-src 'self' 'unsafe-inline' https://challenges.cloudflare.com",
+              "frame-src 'self' https://challenges.cloudflare.com",
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: blob:",
               "font-src 'self'",

@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 import { formatError } from "@/app/api/friends/_lib";
+import { USERNAME_PATTERN, USERNAME_RULE_TEXT } from "@/lib/auth-rules";
 
 export const dynamic = "force-dynamic";
-
-const USERNAME_PATTERN = /^[a-z0-9_]{3,24}$/;
 
 /**
  * Advisory username availability check for the signup form.
@@ -31,8 +30,7 @@ export async function POST(req: Request) {
     if (!USERNAME_PATTERN.test(normalized)) {
       return NextResponse.json({
         available: false,
-        error:
-          "Username must be 3-24 chars: lowercase letters, numbers, underscore.",
+        error: `Username must be ${USERNAME_RULE_TEXT}.`,
       });
     }
 

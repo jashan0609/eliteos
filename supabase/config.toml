@@ -149,7 +149,18 @@ enabled = true
 # in emails.
 site_url = "http://127.0.0.1:3000"
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
-additional_redirect_urls = ["https://127.0.0.1:3000"]
+# `emailRedirectTo` / `redirectTo` are passed from the browser as
+# `window.location.origin`, so every origin the app is served from has to appear
+# here or Supabase silently substitutes site_url and the operator lands on the
+# wrong deployment. Again: local stack only. The production allow-list lives in
+# the dashboard under Authentication → URL Configuration and must list the
+# production origin plus the Vercel preview wildcard.
+additional_redirect_urls = [
+  "https://127.0.0.1:3000",
+  "http://127.0.0.1:3000/**",
+  "http://localhost:3000/**",
+  "http://localhost:3002/**",
+]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600
 # JWT issuer URL. If not set, defaults to the local API URL (http://127.0.0.1:<port>/auth/v1).
@@ -168,14 +179,22 @@ enable_anonymous_sign_ins = false
 # Allow/disallow testing manual linking of accounts
 enable_manual_linking = false
 # Passwords shorter than this value will be rejected as weak. Minimum 6, recommended 8 or more.
-minimum_password_length = 6
+# Mirrored by MIN_PASSWORD_LENGTH in src/lib/auth-rules.ts, which the signup and
+# reset forms enforce. Change both or the form accepts what the backend refuses.
+# Binds new passwords only — the 13 operators who registered under the old
+# minimum of 6 can still sign in.
+minimum_password_length = 10
 # Passwords that do not meet the following requirements will be rejected as weak. Supported values
 # are: `letters_digits`, `lower_upper_letters_digits`, `lower_upper_letters_digits_symbols`
 password_requirements = ""
 
 [auth.rate_limit]
 # Number of emails that can be sent per hour. Requires auth.email.smtp to be enabled.
-email_sent = 2
+# 2/hour is a development default: with confirmations on it is breached by three
+# people signing up at once. Raised for real SMTP. This is a project-wide
+# ceiling, not per-user — CAPTCHA and the Phase 7 rate limiter are what stop one
+# address from consuming it.
+email_sent = 30
 # Number of SMS messages that can be sent per hour. Requires auth.sms to be enabled.
 sms_sent = 30
 # Number of anonymous sign-ins that can be made per hour per IP address. Requires enable_anonymous_sign_ins = true.
@@ -202,11 +221,21 @@ enable_signup = true
 # addresses. If disabled, only the new email is required to confirm.
 double_confirm_changes = true
 # If enabled, users need to confirm their email address before signing in.
-enable_confirmations = false
+# On, matching what OperatorLogin has always told operators to do. Note this
+# file configures the *local* stack only — the hosted project has its own
+# setting in the dashboard, and it is the one that matters for real signups.
+enable_confirmations = true
 # If enabled, users will need to reauthenticate or have logged in recently to change their password.
+# Deliberately left off. It would be defence in depth against a hijacked
+# session, but it also gates /reset-password, and it is not confirmed that a
+# session minted by a recovery link counts as "logged in recently". Turning it
+# on without testing that risks breaking password recovery, which is the one
+# thing this phase exists to fix.
 secure_password_change = false
 # Controls the minimum amount of time that must pass before sending another signup confirmation or password reset email.
-max_frequency = "1s"
+# 1s lets anyone hold down the resend button and burn the hourly email budget
+# for every operator at once.
+max_frequency = "60s"
 # Number of characters used in the email OTP.
 otp_length = 6
 # Number of seconds before the email OTP expires (defaults to 1 hour).

@@ -9,7 +9,9 @@ import {
   useRef,
   type ReactNode,
 } from "react";
+import { usePathname } from "next/navigation";
 import { supabase } from "@/lib/supabase";
+import { USERNAME_PATTERN, USERNAME_RULE_TEXT } from "@/lib/auth-rules";
 // `buildResetPlan` and `getUpdatedGlobalStreak` are gone from this file as of
 // Phase 4: the reset they powered now runs server-side in
 // `src/lib/server/run-daily-reset.ts`, reached via POST /api/system/sync.
@@ -246,6 +248,14 @@ export function EliteProvider({ children }: { children: ReactNode }) {
   // the two fed each other into a permanent request storm.
   const userId = user?.id ?? null;
   const accessToken = session?.access_token ?? null;
+
+  // This provider sits in the root layout, so it mounts on every route —
+  // including the ones that exist only to complete an auth flow. A recovery
+  // link creates a real session, which would otherwise be enough for the load
+  // effect below to POST /api/system/sync and run the daily reset from a page
+  // whose only job is changing a password. Stay dormant there.
+  const pathname = usePathname();
+  const dormant = pathname === "/reset-password";
   const [state, setState] = useState<EliteState>(DEFAULT_STATE);
   const [loading, setLoading] = useState(true);
   const [arenaLoading, setArenaLoading] = useState(false);
@@ -320,7 +330,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let cancelled = false;
 
-    if (!userId) {
+    if (!userId || dormant) {
       queueMicrotask(() => {
         if (cancelled) return;
         setState(DEFAULT_STATE);
@@ -490,7 +500,7 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     // token refreshes — roughly hourly, and a full reload is the right
     // response to a new session anyway. It is emphatically *not* keyed on the
     // `user` object; see the note where `userId` is declared.
-  }, [userId, reloadNonce, authedJson]);
+  }, [userId, dormant, reloadNonce, authedJson]);
 
   const retryLoad = useCallback(() => {
     setLoadError(null);
@@ -539,9 +549,16 @@ export function EliteProvider({ children }: { children: ReactNode }) {
   }, [authedJson, accessToken, userId]);
 
   useEffect(() => {
-    if (!userId || loading) return;
+    if (!userId || loading || dormant) return;
     refreshFriendsArena();
-  }, [loading, refreshFriendsArena, state.logs.length, state.streak, userId]);
+  }, [
+    loading,
+    dormant,
+    refreshFriendsArena,
+    state.logs.length,
+    state.streak,
+    userId,
+  ]);
 
   const showToast = useCallback(
     (type: "gain" | "loss", amount: number, message: string) => {
@@ -555,8 +572,8 @@ export function EliteProvider({ children }: { children: ReactNode }) {
     async (username: string) => {
       if (!user) return "Not authenticated";
       const normalized = username.trim().toLowerCase();
-      if (!/^[a-z0-9_]{3,24}$/.test(normalized)) {
-        return "Username must be 3-24 chars: lowercase letters, numbers, underscore.";
+      if (!USERNAME_PATTERN.test(normalized)) {
+        return `Username must be ${USERNAME_RULE_TEXT}.`;
       }
 
       const { error } = await supabase

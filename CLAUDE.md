@@ -245,9 +245,42 @@ blamed an unset GUC — that diagnosis was wrong, the conclusion was right.)
    reset if due and returns authoritative state. Everything else the context
    does on load is a SELECT.
 
-**Not implemented:** password reset (a forgotten password is currently an
-**unrecoverable lockout**), email change, account deletion, data export. Email
-confirmation is configured off — see §9.
+**Not implemented:** email change, account deletion, data export.
+
+### Password recovery
+
+`OperatorLogin` has a third mode, `reset`, which calls
+`requestPasswordReset` → `supabase.auth.resetPasswordForEmail`. The link lands
+on [reset-password/page.tsx](src/app/reset-password/page.tsx).
+
+Rules that are not obvious from the code:
+
+- **The outcome message is identical whether or not the address has an
+  account.** Anything else turns the form into an oracle for which addresses are
+  registered. Errors from `resetPasswordForEmail` are logged, never shown; the
+  same applies to "resend confirmation".
+- **The page accepts two link formats, and prefers `token_hash`.**
+  `@supabase/ssr` hardcodes `flowType: "pkce"`, and auth-js only exchanges a
+  `?code=` if it *also* finds the verifier it stored in that browser when the
+  reset was requested. Request on a phone, open on a laptop, and the link dies
+  silently. `token_hash` + `verifyOtp` is stateless and survives that, so the
+  dashboard email template should use `{{ .TokenHash }}`.
+- **It reads the session with `getSession`, not the `PASSWORD_RECOVERY`
+  event.** That event fires from a `setTimeout` inside auth-js initialization
+  and can land before the component subscribes; `getSession` awaits the same
+  initialization and returns the settled answer, so there is no race to lose.
+- **Success signs the operator out.** A recovery link is a login bypass, so the
+  session it mints is not carried into the app.
+- A logged-in operator visiting `/reset-password` can set a new password
+  without giving the old one. That is Supabase's default
+  (`secure_password_change = false`), not something this page loosened.
+  Tightening it is a dashboard setting, but see the warning in `config.toml`:
+  it may also gate recovery itself.
+
+**`EliteProvider` stays dormant on `/reset-password`.** It sits in the root
+layout, so it mounts on every route, and a recovery session would otherwise be
+enough for it to POST `/api/system/sync` and run the daily reset from a page
+whose only job is changing a password. Verified: zero API calls on that route.
 
 ---
 
@@ -332,17 +365,27 @@ A schema change usually needs matching updates in
 
 - `supabase/config.toml` configures the **local** stack only. Editing `site_url`
   there does nothing to production — hosted auth settings live in the dashboard.
-- `enable_confirmations = false`, while
-  [OperatorLogin.tsx](src/components/OperatorLogin.tsx) tells the user to check
-  their email. One of the two must change; the decision is to turn confirmation
-  on.
-- `minimum_password_length = 6`, matched by `minLength={6}` in the UI. Raise
-  both or neither.
+  **Every value changed in that file during Phase 6 still has to be set again in
+  the dashboard**, or production keeps the old behaviour: `enable_confirmations`,
+  `minimum_password_length`, `additional_redirect_urls`, `max_frequency`,
+  `rate_limit.email_sent`.
+- **No SMTP.** Supabase's built-in sender is rate-limited and explicitly not for
+  production. Until Resend (or equivalent) is attached, confirmation and
+  recovery emails are unreliable — which makes the recovery flow only as good as
+  the mail behind it.
 - **No CAPTCHA.** Public signup plus working SMTP without one is an open email
-  relay pointed at your own domain reputation.
-- The CSP in [next.config.ts](next.config.ts) will **silently** block Turnstile
-  and Sentry — they need `script-src`/`frame-src` and `connect-src` entries.
-  CSP failures surface only in the browser console.
+  relay pointed at your own domain reputation. The CSP already allows Turnstile;
+  the widget itself is not wired up.
+- Account rules live in [auth-rules.ts](src/lib/auth-rules.ts) —
+  `USERNAME_PATTERN` and `MIN_PASSWORD_LENGTH` (10, raised from 6). They mirror
+  the database CHECK constraint and `auth.minimum_password_length`
+  respectively; change one without the other and the form accepts input the
+  backend rejects. The length binds only when a password is *set*, so operators
+  registered under the old 6-character minimum are not locked out.
+- The CSP in [next.config.ts](next.config.ts) will **silently** block Sentry —
+  it needs a `connect-src` entry. CSP failures surface only in the browser
+  console. It also blocks `eval`, which React uses for dev-mode stack traces:
+  the console errors that produces in `next dev` are expected and harmless.
 - **No CI.** `npm test` protects only what someone remembers to run.
 - The build-version banner (`x-app-build` → reload prompt) only protects tabs
   loaded since Phase 4 shipped. Older tabs run JS that never checks the header.
@@ -357,6 +400,9 @@ A schema change usually needs matching updates in
 - **Global state** — [EliteContext.tsx](src/context/EliteContext.tsx) *(the
   single largest file; all browser writes live here)*
 - **Auth** — [AuthContext.tsx](src/context/AuthContext.tsx),
+  [OperatorLogin.tsx](src/components/OperatorLogin.tsx) (login / register /
+  reset), [reset-password/page.tsx](src/app/reset-password/page.tsx),
+  [auth-rules.ts](src/lib/auth-rules.ts) (shared username + password rules),
   [check-username/route.ts](src/app/api/auth/check-username/route.ts)
 - **API guard** — [_lib/guard.ts](src/app/api/_lib/guard.ts) —
   `requireUserFromBearer`, `parseJsonBody`, `serverError`. *(Phase 7 hangs rate
@@ -398,20 +444,27 @@ The full plan lives at `~/.claude/plans/lets-make-a-plan-bright-hopper.md`.
 | 3 | Server-authoritative routes with compare-and-swap (additive) |
 | 4 | Client switched over; swallowed writes fixed; build-version tripwire |
 | 5 | Column-level grants, `WITH CHECK`, CHECK constraints, row caps, pgTAP |
+| 6a | Password recovery end to end; enumeration-safe messages; shared account rules; local auth config tightened |
 
 Also fixed along the way: the auth-state request storm (§5).
 
 **Remaining**, in dependency order:
 
-6. **Auth hardening.** Password reset (currently a total lockout) — add
-   `requestPasswordReset` / `updatePassword` to `AuthContext`, a third mode in
-   `OperatorLogin`, and a `/reset-password` page guarded on the
-   `PASSWORD_RECOVERY` event. Identical success message whether or not the email
-   exists, to avoid enumeration. Then email confirmation on, real SMTP (Resend —
-   Supabase's built-in is rate-limited and not for production), CAPTCHA
-   (Turnstile; the `[auth.captcha]` block is stubbed), `site_url` +
-   `additional_redirect_urls` in the **dashboard**, and raise
-   `auth.rate_limit.email_sent` from its dev default of 2/hour.
+6. **Auth hardening — the rest.** The code half shipped (§6). What is left is
+   almost entirely **configuration the dashboard owns**, and none of it is
+   visible in this repo:
+   - Attach real SMTP (**Resend**). Nothing else in this list matters until mail
+     is reliable — a recovery flow with no mail behind it is still a lockout.
+   - Set the recovery email template to use `{{ .TokenHash }}`, so links survive
+     being opened in a different browser (§6).
+   - Mirror the `config.toml` changes into the dashboard: confirmations on,
+     password length 10, `site_url` + `additional_redirect_urls` (production,
+     Vercel preview wildcard, localhost), `max_frequency`, `email_sent`.
+   - **CAPTCHA** (Turnstile). The CSP allowance is already in `next.config.ts`;
+     the `[auth.captcha]` block is stubbed and the widget is unwired.
+   - Verify a real signup → confirm → login, and a real forgot → reset → login.
+     The flows are verified against Supabase as far as `/auth/v1/recover`
+     returning 200; the leg through an actual inbox is not.
 7. **CI, monitoring, rate limiting.** GitHub Actions on Node 22 running lint /
    typecheck / test / build plus `supabase test db` — the only thing that will
    stop a `grants.sql`-shaped file in six months. Sentry. `@upstash/ratelimit`
