@@ -4,7 +4,8 @@ import {
   canonicalPair,
   formatError,
   requireUserFromBearer,
-} from "@/app/api/friends/_lib";
+  serverError,
+} from "@/app/api/_lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -18,7 +19,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "friendUserId is required" }, { status: 400 });
     }
 
-    const userId = auth.user!.id;
+    const userId = auth.user.id;
     if (friendUserId === userId) {
       return NextResponse.json({ error: "Invalid friend id" }, { status: 400 });
     }
@@ -41,8 +42,6 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true });
   } catch (err) {
-    const message = formatError(err);
-    console.error(`[FRIEND_REMOVE_FAILURE] ${message}`);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError("FRIEND_REMOVE_FAILURE", err);
   }
 }

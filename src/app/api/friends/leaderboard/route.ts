@@ -5,7 +5,11 @@ import {
   type ArenaLeaderboardEntry,
   type ArenaLog,
 } from "@/lib/arena";
-import { formatError, requireUserFromBearer } from "@/app/api/friends/_lib";
+import {
+  formatError,
+  requireUserFromBearer,
+  serverError,
+} from "@/app/api/_lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -30,7 +34,7 @@ export async function GET(req: Request) {
   if (auth.error) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
   try {
-    const userId = auth.user!.id;
+    const userId = auth.user.id;
     const [profileRes, friendshipsRes, acceptedRes] = await Promise.all([
       supabaseAdmin
         .from("operator_profile")
@@ -129,8 +133,6 @@ export async function GET(req: Request) {
       friendCount: Math.max(0, allIds.length - 1),
     });
   } catch (err) {
-    const message = formatError(err);
-    console.error(`[FRIEND_LEADERBOARD_FAILURE] ${message}`);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError("FRIEND_LEADERBOARD_FAILURE", err);
   }
 }

@@ -5,6 +5,7 @@ import {
   requireUserFromBearer,
   serverError,
 } from "@/app/api/_lib/guard";
+import { enforceRateLimit } from "@/app/api/_lib/rate-limit";
 import { supabaseEconomyDb } from "@/app/api/economy/_db";
 import { handleHabitToggle } from "./handler";
 
@@ -22,13 +23,17 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
   }
 
+  // Budget keys on the operator, not the address — see rate-limit.ts.
+  const limited = await enforceRateLimit("habitToggle", auth.user.id);
+  if (limited) return limited;
+
   const body = await parseJsonBody(req, bodySchema);
   if (!body.ok) return body.response;
 
   try {
     const outcome = await handleHabitToggle({
       db: supabaseEconomyDb,
-      userId: auth.user!.id,
+      userId: auth.user.id,
       request: body.data,
     });
     return NextResponse.json(outcome.body, { status: outcome.status });

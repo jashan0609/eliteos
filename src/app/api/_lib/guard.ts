@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import type { User } from "@supabase/supabase-js";
 import type { ZodType } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-admin";
 
@@ -6,12 +7,8 @@ import { supabaseAdmin } from "@/lib/supabase-admin";
  * Shared entry guard for every API route.
  *
  * Promoted out of `src/app/api/friends/_lib.ts` in Phase 3, when the economy
- * routes became the second consumer. `friends/_lib.ts` re-exports from here so
- * the five existing routes did not have to churn.
- *
- * This is also the single place Phase 7 hangs rate limiting: it runs after the
- * bearer token is resolved, so budgets can be keyed on user id rather than IP,
- * which is what you actually want for abuse control.
+ * routes became the second consumer. The shim that file left behind was deleted
+ * in Phase 7 — every route imports from here directly now.
  */
 
 /**
@@ -19,9 +16,11 @@ import { supabaseAdmin } from "@/lib/supabase-admin";
  *
  * ⚠ **Never return this to the browser.** It deliberately includes `details`,
  * `hint` and `code`, which leak constraint names, column names and query hints.
- * It exists for server logs. The economy routes added in Phase 3 log this and
- * return a fixed string to the caller; the older friends routes still return it
- * on a 500 and are scheduled to be fixed alongside error monitoring in Phase 7.
+ * It exists for server logs, and `serverError` below is the only thing that
+ * should be reaching for it on a failure path.
+ *
+ * Five friends routes used to return this string straight to the caller on a
+ * 500. Fixed in Phase 7; do not reintroduce the pattern.
  */
 export function formatError(err: unknown) {
   if (err instanceof Error) return err.message;
@@ -37,22 +36,39 @@ export function formatError(err: unknown) {
   return String(err);
 }
 
-export async function requireUserFromBearer(req: Request) {
+/**
+ * Explicit union so `if (auth.error) return …` actually narrows.
+ *
+ * Inferred, this collapsed into one shape where `user` was always possibly
+ * undefined, which is why every call site carried `auth.user!.id` — a non-null
+ * assertion standing in for a type the compiler could have proven.
+ *
+ * `error` is the literal `"Unauthorized"` rather than `string` because that is
+ * what makes it a usable discriminant: TypeScript narrows a union on a property
+ * only when its type is a unit type in each member. Widen it back to `string`
+ * and the assertions all have to come back.
+ */
+export type BearerAuth =
+  | { user: null; error: "Unauthorized"; status: 401 }
+  | { user: User; error: null; status: 200 };
+
+export async function requireUserFromBearer(req: Request): Promise<BearerAuth> {
   const authHeader = req.headers.get("authorization");
   const token = authHeader?.startsWith("Bearer ")
     ? authHeader.slice("Bearer ".length)
     : null;
 
-  if (!token) return { error: "Unauthorized", status: 401 as const };
+  if (!token) return { user: null, error: "Unauthorized", status: 401 };
 
   const {
     data: { user },
     error: authError,
   } = await supabaseAdmin.auth.getUser(token);
 
-  if (authError || !user) return { error: "Unauthorized", status: 401 as const };
+  if (authError || !user)
+    return { user: null, error: "Unauthorized", status: 401 };
 
-  return { user, error: null, status: 200 as const };
+  return { user, error: null, status: 200 };
 }
 
 export function canonicalPair(a: string, b: string) {
@@ -104,11 +120,15 @@ export async function parseJsonBody<T>(
 }
 
 /**
- * The only 500 body the economy routes emit.
+ * The only 500 body any route emits.
  *
- * Full detail goes to the server log; the caller gets a fixed string. Phase 7
- * will attach a Sentry event id here so a support conversation can reference a
- * specific failure without the response ever carrying schema internals.
+ * Full detail goes to the server log; the caller gets a fixed string. This is
+ * the single choke point for that rule, which is why every route's catch block
+ * is now one line — there is nowhere left to accidentally spell out the leak.
+ *
+ * When Sentry is attached, capture here and add its event id to the response
+ * so a support conversation can reference a specific failure without the body
+ * ever carrying schema internals.
  */
 export function serverError(tag: string, err: unknown) {
   console.error(`[${tag}] ${formatError(err)}`);

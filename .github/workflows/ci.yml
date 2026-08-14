@@ -1,0 +1,87 @@
+name: CI
+
+# Until now `npm test` protected only what someone remembered to run, and the
+# pgTAP grant matrix protected nothing at all — it needed Docker and a manual
+# `supabase test db`. That is the gap this closes: the database job below is the
+# thing that will stop a `grants.sql`-shaped file from silently re-granting
+# what Phases 0 and 5 revoked.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A second push to the same branch makes the first run irrelevant. Cancelling it
+# keeps the queue short and the feedback honest.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Lint, types, unit tests and the production build. Split into one job with
+  # explicit steps rather than four parallel jobs: each would re-run `npm ci`,
+  # which costs more than the steps themselves.
+  app:
+    name: Lint, typecheck, test, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Test
+        run: npm test
+
+      # Audits client source for writes to columns the server owns. Cheap, and
+      # it fails on exactly the mistake that would undo Phase 5 from the other
+      # direction — client code reaching for a revoked column.
+      - name: Phase 5 preflight
+        run: npm run preflight:phase5
+
+      - name: Build
+        run: npm run build
+        env:
+          # The build imports the browser client, which throws on a missing URL.
+          # These are placeholders: nothing in a build step talks to Supabase,
+          # and the real values are Vercel's. Deliberately NOT the production
+          # keys — CI has no reason to hold them.
+          NEXT_PUBLIC_SUPABASE_URL: https://placeholder.supabase.co
+          NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder-anon-key
+          SUPABASE_SERVICE_ROLE_KEY: placeholder-service-role-key
+
+  # The durable guard. 20 pgTAP assertions that attempt each write the client
+  # must not be able to make and require 42501 back.
+  database:
+    name: Grant matrix (pgTAP)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: supabase/setup-cli@v1
+        with:
+          version: latest
+
+      # Builds the schema from supabase/migrations/ alone. If a migration is
+      # missing — the recurring failure mode here, since `db pull` never sees
+      # anything outside `public` — this is where it surfaces, because the
+      # signup-trigger assertion fails without it.
+      - name: Start local stack
+        run: supabase start
+
+      - name: Run grant matrix
+        run: supabase test db
+
+      - name: Stop
+        if: always()
+        run: supabase stop --no-backup

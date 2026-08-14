@@ -4,13 +4,20 @@ import {
   canonicalPair,
   formatError,
   requireUserFromBearer,
-} from "@/app/api/friends/_lib";
+  serverError,
+} from "@/app/api/_lib/guard";
+import { enforceRateLimit } from "@/app/api/_lib/rate-limit";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request) {
   const auth = await requireUserFromBearer(req);
   if (auth.error) return NextResponse.json({ error: auth.error }, { status: auth.status });
+
+  // Fails closed: if the limiter is unreachable, unsolicited friend requests
+  // are exactly what should not get an unlimited window.
+  const limited = await enforceRateLimit("friendRequest", auth.user.id);
+  if (limited) return limited;
 
   try {
     const { username } = (await req.json()) as { username?: string };
@@ -19,7 +26,7 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: "Username is required" }, { status: 400 });
     }
 
-    const senderId = auth.user!.id;
+    const senderId = auth.user.id;
     const [senderProfileRes, receiverProfileRes] = await Promise.all([
       supabaseAdmin.from("operator_profile").select("id, username").eq("id", senderId).single(),
       // `.eq`, not `.ilike`: underscore is a legal username character AND a
@@ -84,8 +91,6 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ ok: true, requestId: insertRes.data.id });
   } catch (err) {
-    const message = formatError(err);
-    console.error(`[FRIEND_REQUEST_CREATE_FAILURE] ${message}`);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError("FRIEND_REQUEST_CREATE_FAILURE", err);
   }
 }

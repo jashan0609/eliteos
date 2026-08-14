@@ -1,6 +1,10 @@
 import { NextResponse } from "next/server";
 import { supabaseAdmin } from "@/lib/supabase-admin";
-import { formatError, requireUserFromBearer } from "@/app/api/friends/_lib";
+import {
+  formatError,
+  requireUserFromBearer,
+  serverError,
+} from "@/app/api/_lib/guard";
 
 export const dynamic = "force-dynamic";
 
@@ -9,7 +13,7 @@ export async function GET(req: Request) {
   if (auth.error) return NextResponse.json({ error: auth.error }, { status: auth.status });
 
   try {
-    const userId = auth.user!.id;
+    const userId = auth.user.id;
 
     const [inboundRes, outboundRes] = await Promise.all([
       supabaseAdmin
@@ -63,8 +67,6 @@ export async function GET(req: Request) {
       })),
     });
   } catch (err) {
-    const message = formatError(err);
-    console.error(`[FRIEND_REQUESTS_FAILURE] ${message}`);
-    return NextResponse.json({ error: message }, { status: 500 });
+    return serverError("FRIEND_REQUESTS_FAILURE", err);
   }
 }

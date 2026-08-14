@@ -217,9 +217,18 @@ blamed an unset GUC — that diagnosis was wrong, the conclusion was right.)
   `/api/auth/check-username` exists.
 - **`formatError`** in [_lib/guard.ts](src/app/api/_lib/guard.ts) concatenates
   the Postgres `message | details | hint | code`, leaking constraint and column
-  names. The economy routes log it and return a fixed string; the five older
-  friends routes still return it to the browser on a 500. Fix in Phase 7; do not
-  copy the pattern.
+  names. It is for logs only. Every route now funnels failures through
+  `serverError`, which logs the detail and returns a fixed string, so each
+  catch block is one line — do not hand-roll a 500 body and reintroduce the
+  leak. The one deliberate exception is `/api/system/reset`, whose `failures`
+  array carries per-operator messages; that route requires `Bearer $CRON_SECRET`,
+  so its audience is the cron caller, not a browser.
+- **An inferred union will not narrow on a `string` property.**
+  `requireUserFromBearer` used to infer its result type, which collapsed `user`
+  into "possibly undefined" and left `auth.user!` scattered across nine routes.
+  TypeScript narrows on a property only when its type is a *unit* type in each
+  member, which is why `BearerAuth` declares `error: "Unauthorized" | null`
+  rather than `string | null`. Widen it and every assertion has to come back.
 - **Seven writes used to end in `.then(() => {})`**, making failure completely
   invisible — a delete that never reached the database still vanished from the
   UI and reappeared on next load. They now await, roll back, and toast. Do not
@@ -315,13 +324,18 @@ below every scored one.
 npm run dev -- --port 3002
 npm run lint
 npm run build
-npm test                  # 75 tests, Node's built-in runner, no framework
+npm test                  # 84 tests, Node's built-in runner, no framework
 npm run preflight:phase5  # audits client source for server-owned column writes
 ```
 
 `npm test` covers `src/**/*.test.ts`: the economy kernel, daily-reset and arena
-logic, and the economy route handlers (against an in-memory fake `EconomyDb`, so
-nothing touches Supabase). Safe to run any time.
+logic, the economy route handlers (against an in-memory fake `EconomyDb`, so
+nothing touches Supabase), and the rate-limit policy. Safe to run any time.
+
+All of it now runs on every push and pull request — see
+[.github/workflows/ci.yml](.github/workflows/ci.yml), which also runs the pgTAP
+grant matrix in a throwaway Supabase stack. **Require both jobs in branch
+protection**; CI that is not required is CI that gets ignored.
 
 Database tests need Docker running:
 
@@ -392,7 +406,14 @@ A schema change usually needs matching updates in
   it needs a `connect-src` entry. CSP failures surface only in the browser
   console. It also blocks `eval`, which React uses for dev-mode stack traces:
   the console errors that produces in `next dev` are expected and harmless.
-- **No CI.** `npm test` protects only what someone remembers to run.
+- **Rate limiting is inert without Upstash.** `UPSTASH_REDIS_REST_URL` and
+  `UPSTASH_REDIS_REST_TOKEN` are unset, so every budget in
+  [rate-limit.ts](src/app/api/_lib/rate-limit.ts) allows everything. That is
+  correct for local work and CI, and a real hole in production — where the
+  module logs `[RATE_LIMIT_DISABLED]` at startup so it is not silent. With no
+  CAPTCHA (§3) this is the only abuse control there is.
+- **No error monitoring.** Sentry is not installed; it needs a DSN. Failures
+  reach `console.error` and Vercel's log retention, and nothing alerts.
 - The build-version banner (`x-app-build` → reload prompt) only protects tabs
   loaded since Phase 4 shipped. Older tabs run JS that never checks the header.
 
@@ -411,9 +432,14 @@ A schema change usually needs matching updates in
   [auth-rules.ts](src/lib/auth-rules.ts) (shared username + password rules),
   [check-username/route.ts](src/app/api/auth/check-username/route.ts)
 - **API guard** — [_lib/guard.ts](src/app/api/_lib/guard.ts) —
-  `requireUserFromBearer`, `parseJsonBody`, `serverError`. *(Phase 7 hangs rate
-  limiting here — it runs after the bearer resolves, so budgets key on user id.)*
-  [friends/_lib.ts](src/app/api/friends/_lib.ts) is a re-export shim.
+  `requireUserFromBearer`, `parseJsonBody`, `serverError`. The
+  `friends/_lib.ts` re-export shim was deleted in Phase 7; every route imports
+  from `_lib/guard` directly.
+- **Rate limiting** — [rate-limit.ts](src/app/api/_lib/rate-limit.ts) (Upstash
+  I/O) over [rate-limit-policy.ts](src/app/api/_lib/rate-limit-policy.ts)
+  (budgets and fail modes, pure and tested). Called from each route after the
+  bearer resolves, so budgets key on user id rather than IP — the exception is
+  `check-username`, the only unauthenticated route, which keys on address.
 - **Economy kernel** — [economy.ts](src/lib/economy.ts) + tests
 - **Economy routes** — [habit/toggle](src/app/api/economy/habit/toggle/handler.ts),
   [objective/progress](src/app/api/economy/objective/progress/handler.ts),
@@ -451,6 +477,7 @@ The full plan lives at `~/.claude/plans/lets-make-a-plan-bright-hopper.md`.
 | 4 | Client switched over; swallowed writes fixed; build-version tripwire |
 | 5 | Column-level grants, `WITH CHECK`, CHECK constraints, row caps, pgTAP |
 | 6a | Password recovery end to end; enumeration-safe messages; shared account rules; local auth config tightened |
+| 7a | CI on every push (app + pgTAP grant matrix); rate limiting; `formatError` leak closed |
 
 Also fixed along the way: the auth-state request storm (§5).
 
@@ -469,10 +496,16 @@ Also fixed along the way: the auth-state request storm (§5).
    - Verify a real signup → confirm → login, and a real forgot → reset → login.
      The flows are verified against Supabase as far as `/auth/v1/recover`
      returning 200; the leg through an actual inbox is not.
-7. **CI, monitoring, rate limiting.** GitHub Actions on Node 22 running lint /
-   typecheck / test / build plus `supabase test db` — the only thing that will
-   stop a `grants.sql`-shaped file in six months. Sentry. `@upstash/ratelimit`
-   in `guard.ts` (not middleware). Fix the `formatError` leak.
+7. **Monitoring — the rest of Phase 7.** CI, rate limiting and the
+   `formatError` leak are done (7a below). What remains is **Sentry**, which
+   needs a DSN: `npx @sentry/wizard@latest -i nextjs`, then add
+   `https://*.ingest.sentry.io` to `connect-src` in `next.config.ts`, capture
+   inside `serverError` and attach the event id to the response body. Also add
+   `/api/health` plus an uptime check, and alert on `/api/system/reset`
+   returning non-200 — a silently failing reset is invisible until operators
+   complain about streaks.
+   **And provide Upstash credentials**, or the limiter shipped in 7a stays
+   inert (§9).
 8. **Compliance and the Arena fix.** `POST /api/account/delete` via
    `supabaseAdmin.auth.admin.deleteUser` (the FK cascade is complete),
    `GET /api/account/export`, privacy policy and terms, cleanup of unconfirmed
