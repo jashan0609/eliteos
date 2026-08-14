@@ -1,732 +1,435 @@
 @AGENTS.md
 
-# EliteOS Project Memory
+# EliteOS — Project Memory
 
-This file is a full working memory for the current EliteOS codebase as of August 11, 2026.
+Working memory for the EliteOS codebase, current as of **August 14, 2026**.
 
-It is meant to help future agents and collaborators understand:
+This file records what is *not* obvious from reading the code: the security
+boundaries and why they exist, the traps that have already cost real debugging
+time, decisions that are settled, and what remains. Descriptions of what the app
+does are kept short — the code says that better.
 
-- what the app does
-- what has already been implemented
-- which database scripts matter
-- which product decisions have already been made
-- what behavior is expected in the UI and backend
+**If you change a security boundary or a product rule, update this file in the
+same commit.**
 
-## 1. Product Summary
+---
 
-EliteOS is a gamified personal operating system built with Next.js, React, and Supabase.
+## 1. What EliteOS is
 
-Core user flows:
+A gamified personal operating system: Next.js 16 (App Router, Turbopack), React
+19, Tailwind v4, Supabase (auth + Postgres). Dark terminal / glassmorphism
+styling, mobile-friendly.
 
-- sign up / sign in
-- manage objectives
-- manage daily habits
-- manage non-negotiables
-- earn XP and maintain streaks
-- archive daily logs at reset
-- compare performance with friends in the Arena
-- view account data in a Profile tab
+An operator signs up, tracks **objectives** (`north-star` or `sprint`), **daily
+habits**, and **non-negotiables**; earns XP and streaks; has each day archived
+to `daily_logs` at reset; and competes with friends on a rolling 7-day
+leaderboard in the **Arena**.
 
-The app is mobile-friendly and uses a custom dark terminal / glassmorphism visual style.
+Six tabs — dashboard, objectives, arena, habits, logs, profile — routed by
+`activeTab` in [page.tsx](src/app/page.tsx) and rendered by
+[Dashboard.tsx](src/components/Dashboard.tsx), which is the view router as well
+as the dashboard itself.
 
-## 2. Current High-Level Feature Set
+**The app is going to public signups.** Assume strangers can register; that is
+the bar for every security, abuse, and compliance decision.
 
-### Authentication
+---
 
-- Email/password auth is handled with Supabase.
-- Signup now requires a username.
-- Username policy:
-  - 3-24 characters
-  - lowercase letters
-  - numbers
-  - underscore only
-- Username is collected during account creation, not later in the Arena.
-- Username availability is checked **server-side** via
-  `POST /api/auth/check-username`, which uses the service-role key. The
-  browser cannot read `operator_profile` for anyone but itself, so a
-  client-side availability check is structurally impossible — an earlier one
-  ran as `anon`, matched zero rows under RLS, and reported every username as
-  available. That check is advisory only; the database is the authority.
-- The `operator_profile` row is created by the `on_auth_user_created` trigger
-  on `auth.users`, **not** by the client. The trigger resolves collisions by
-  suffixing (`name`, `name_2`, ...), so signup cannot fail on username
-  contention.
+## 2. The trust boundary
 
-Not yet implemented: password reset, email change, account deletion, and data
-export. A forgotten password is currently an unrecoverable lockout. Email
-confirmation is configured off; see section 17.
+This is the most important thing in this file.
 
-Relevant files:
+**The server owns every value that affects rank.** The browser sends *intent*
+and never a number. XP, streaks, habit completion, objective progress, and
+`daily_logs` are written only by API routes running as `service_role`.
 
-- [src/context/AuthContext.tsx](/Users/jashanubhi/Desktop/coding/elite/src/context/AuthContext.tsx)
-- [src/components/OperatorLogin.tsx](/Users/jashanubhi/Desktop/coding/elite/src/components/OperatorLogin.tsx)
-- [src/app/api/auth/check-username/route.ts](/Users/jashanubhi/Desktop/coding/elite/src/app/api/auth/check-username/route.ts)
-
-### Dashboard
-
-- Dashboard shows:
-  - XP trend chart
-  - goal progress
-  - non-negotiable progress
-  - daily habits progress
-  - quick stats
-
-Relevant file:
-
-- [src/components/Dashboard.tsx](/Users/jashanubhi/Desktop/coding/elite/src/components/Dashboard.tsx)
-
-### Objectives
-
-- Users can add, edit, delete, and progress objectives.
-- Objective types:
-  - `north-star`
-  - `sprint`
-- Objective completion rewards XP.
-
-Relevant files:
-
-- [src/components/ObjectivesView.tsx](/Users/jashanubhi/Desktop/coding/elite/src/components/ObjectivesView.tsx)
-- [src/components/AddObjectiveModal.tsx](/Users/jashanubhi/Desktop/coding/elite/src/components/AddObjectiveModal.tsx)
-
-### Habits and Non-Negotiables
-
-- Users can add, edit, delete, and toggle:
-  - daily habits
-  - non-negotiables
-- Toggling affects XP immediately.
-- Streaks are persisted and updated at daily reset.
-
-Relevant files:
-
-- [src/components/HabitsView.tsx](/Users/jashanubhi/Desktop/coding/elite/src/components/HabitsView.tsx)
-- [src/context/EliteContext.tsx](/Users/jashanubhi/Desktop/coding/elite/src/context/EliteContext.tsx)
-
-### Daily Reset
-
-- Daily reset archives the previous day into `daily_logs`.
-- It resets `completed_today` flags on habits and non-negotiables.
-- It updates:
-  - user XP after penalties
-  - per-habit streaks
-  - overall streak
-  - `last_habit_reset`
-- Reset is timezone-aware per user profile.
-
-Relevant files:
-
-- [src/lib/daily-reset.ts](/Users/jashanubhi/Desktop/coding/elite/src/lib/daily-reset.ts)
-- [src/app/api/system/reset/route.ts](/Users/jashanubhi/Desktop/coding/elite/src/app/api/system/reset/route.ts)
-
-### Arena (Friends Competition)
-
-The old anonymous Ghost benchmark was replaced with a friends-based Arena.
-
-Current Arena behavior:
-
-- add friends by username
-- incoming friend requests
-- outgoing friend requests
-- accept / decline incoming requests
-- cancel outgoing requests
-- unfriend existing friends
-- see a rolling 7-day leaderboard for self + friends
-
-Leaderboard fields:
-
-- rank
-- username
-- XP
-- streak
-- 7-day score
-
-Friend actions use confirmations in the UI.
-
-Relevant files:
-
-- [src/components/GhostView.tsx](/Users/jashanubhi/Desktop/coding/elite/src/components/GhostView.tsx)
-- [src/lib/arena.ts](/Users/jashanubhi/Desktop/coding/elite/src/lib/arena.ts)
-- [src/app/api/friends/request/route.ts](/Users/jashanubhi/Desktop/coding/elite/src/app/api/friends/request/route.ts)
-- [src/app/api/friends/respond/route.ts](/Users/jashanubhi/Desktop/coding/elite/src/app/api/friends/respond/route.ts)
-- [src/app/api/friends/remove/route.ts](/Users/jashanubhi/Desktop/coding/elite/src/app/api/friends/remove/route.ts)
-- [src/app/api/friends/requests/route.ts](/Users/jashanubhi/Desktop/coding/elite/src/app/api/friends/requests/route.ts)
-- [src/app/api/friends/leaderboard/route.ts](/Users/jashanubhi/Desktop/coding/elite/src/app/api/friends/leaderboard/route.ts)
-
-### Profile Tab
-
-There is now a dedicated Profile tab.
-
-Profile tab shows:
-
-- username
-- email
-- created date
-- timezone
-- level / rank
-- XP
-- streak
-- friend count
-
-Profile tab also allows username editing.
-
-Username editing follows the same validation policy as signup.
-
-Relevant file:
-
-- [src/components/ProfileView.tsx](/Users/jashanubhi/Desktop/coding/elite/src/components/ProfileView.tsx)
-
-### Logs
-
-Logs were changed to reduce over-storage.
-
-Current logs behavior:
-
-- Logs tab shows only the latest 7 logs by default.
-- A `MORE` button expands to show the rest of the retained logs.
-- `SHOW LESS` collapses back to the first 7.
-- Only recent-month logs are loaded from the client.
-
-Relevant files:
-
-- [src/components/LogsView.tsx](/Users/jashanubhi/Desktop/coding/elite/src/components/LogsView.tsx)
-- [src/context/EliteContext.tsx](/Users/jashanubhi/Desktop/coding/elite/src/context/EliteContext.tsx)
-
-## 3. Important Product Decisions Already Made
-
-These decisions should be treated as current intent unless the user explicitly changes them:
-
-- Arena is friends-based, not anonymous.
-- Username is required at signup.
-- Username is no longer configured from the Arena tab.
-- Existing legacy users should get usernames based on email prefix before `@`.
-- Username collisions for legacy users are resolved deterministically with suffixes like `_2`, `_3`, etc.
-- Profile tab exists and username editing lives there.
-- Logs are retained only for a recent rolling month.
-- Logs UI is weekly-first with expandable older entries inside that recent-month window.
-
-Decisions made during the production-hardening work (August 11, 2026):
-
-- **The app is being taken to public signups.** Assume strangers can register;
-  that is the bar for security, abuse, and compliance decisions.
-- **XP and streaks become server-authoritative via Next.js API routes**, reusing
-  `requireUserFromBearer` and `supabaseAdmin`. Explicitly *not* Postgres RPCs —
-  the economy logic stays in TypeScript so it shares one tested implementation
-  with the client-side types and `src/lib/`.
-- **The database moves to Supabase CLI migrations.** The hand-run `.sql` files
-  are being retired; see section 5.
-- **Email confirmation will be turned on**, which requires real SMTP and a
-  corrected `site_url`.
-
-## 4. Database Model Overview
-
-Main tables in active use:
-
-- `operator_profile`
-- `objectives`
-- `daily_habits`
-- `non_negotiables`
-- `daily_logs`
-- `friend_requests`
-- `friendships`
-
-### operator_profile
-
-Important fields:
-
-- `id`
-- `username`
-- `xp`
-- `streak`
-- `last_check_in`
-- `last_habit_reset`
-- `timezone`
-- `initialized_at`
-- `created_at`
-
-Legacy fields still present:
-
-- `ghost_opt_in`
-- `ghost_opted_in_at`
-
-These Ghost fields remain in schema for backward compatibility, but product behavior no longer depends on anonymous Ghost mode.
-
-### friend_requests
-
-Used for pending / accepted / declined / canceled friend request flow.
-
-Important columns:
-
-- `sender_id`
-- `receiver_id`
-- `status`
-- `created_at`
-- `responded_at`
-
-**Write access is service-role only.** `authenticated` holds SELECT and nothing
-else. All mutations go through the routes under `src/app/api/friends/`.
-
-### friendships
-
-Stores accepted friend relationships using a canonical low/high pair:
-
-- `user_low_id`
-- `user_high_id`
-
-**Write access is service-role only**, same as `friend_requests`. This is a
-security boundary, not a style choice: the previous INSERT policy only checked
-that the caller was one of the two people in the pair, so any authenticated
-user could insert `(self, victim)` through the anon-key client and then read
-that victim's username, XP, streak and full `daily_logs` from the leaderboard —
-no request, no consent. Do not re-grant INSERT/UPDATE/DELETE on this table to
-`authenticated`.
-
-The leaderboard route additionally cross-checks every friendship against an
-accepted `friend_requests` row and logs `[FRIENDSHIP_WITHOUT_ACCEPTED_REQUEST]`
-for any that fail. That is a deliberate tripwire — if it ever fires, someone has
-write access they should not have.
-
-### daily_logs
-
-Archived day summaries used for:
-
-- logs UI
-- Arena scoring
-- XP history chart
-
-## 5. Database Migrations
-
-**The schema lives in `supabase/migrations/` and nowhere else.** The eleven
-hand-run `.sql` files that used to sit here were deleted on August 13, 2026,
-when Phase 1 landed. Git has them if you ever need the archaeology; do not
-resurrect them, and above all do not run them — `fix-permissions.sql` and
-`grants.sql` would silently re-grant exactly what Phase 0 revoked and reopen
-the friendship data-exposure hole.
-
-### The baseline
-
-- `supabase/migrations/20260813080640_remote_schema.sql` — captured mechanically
-  with `supabase db pull` against production. It is *reality*, not an idealised
-  schema: 7 tables, 20 policies, RLS on every table, the FK cascades to
-  `auth.users`, and the `daily_logs_user_date_idx` unique index that existed in
-  production but appeared in no repo file. `db pull` also recorded it as
-  already-applied remotely, so a later `db push` will not re-run this DDL
-  against live data.
-- `supabase/migrations/20260813080755_auth_user_profile_trigger.sql` — the
-  `on_auth_user_created` trigger. **`db pull` captures the `public` schema
-  only**, so it took `handle_new_user()` (which lives in `public`) but not the
-  trigger on `auth.users` that invokes it. Without this file a rebuild produces
-  a function nobody calls, and new signups get an auth row with no profile —
-  the bricked-account bug all over again. Idempotent, so applying it to
-  production is a no-op.
-
-Verified on August 13, 2026: both migrations apply cleanly to a database built
-from scratch (`supabase start`), and the resulting database has the trigger on
-`auth.users`, SELECT-only grants for `authenticated` on the friend tables, the
-unique index, and zero `anon` grants in `public`. `supabase db diff --linked
---schema public` reports no schema changes.
-
-### The blind spot that bit us twice
-
-`db pull --schema public` does not see the `auth`, `cron`, or `storage`
-schemas. Two things lived there and were nearly lost:
-
-- the `on_auth_user_created` trigger (now pinned by its own migration above);
-- the `pg_cron` jobs, which are **not** in any migration and must be managed by
-  hand in the SQL editor. See section 6.
-
-If you add anything outside `public`, write it a migration by hand — the pull
-will not do it for you.
-
-### Adding a schema change
-
-`supabase migration new <name>`, edit the generated file, verify locally with
-`supabase db reset`, then `supabase db push`. Nothing is applied by hand again.
-
-## 6. Logs Retention Rules
-
-Current retention strategy:
-
-- keep only recent rolling month of `daily_logs`
-- show only first 7 logs in UI initially
-- reveal rest of retained logs when user clicks `MORE`
-
-Important implication:
-
-- the DB is intentionally not a long-term historical warehouse anymore
-- old log months should be pruned
-- anything that depends on `daily_logs` should be designed around short-term history
-
-### Scheduled jobs (not in any migration)
-
-Two schedulers exist and neither is captured by `supabase db pull`. Audited
-August 13, 2026 with `select jobid, jobname, schedule, command from cron.job;`:
-
-- **`eliteos-log-retention`** (`pg_cron`, `15 1 * * *`) — **live and load-bearing.**
-  Runs `delete from daily_logs where date < (current_date - interval '1 month')`.
-  This is what enforces the rolling month; the 31 days of history observed in
-  production match it exactly. Do not remove it. Known cosmetic flaw: it
-  compares against `current_date` (UTC) while log dates are written in each
-  user's local day, so an operator well ahead of UTC can lose a log a few hours
-  early.
-- **Vercel cron** (`vercel.json`, `0 * * * *`) — hits `/api/system/reset` hourly.
-  The `last_habit_reset === today` guard makes it idempotent, so hourly is safe
-  and closes the timezone-lateness window. **This is the real reset scheduler.**
-
-A third job, `daily-system-reset` (`pg_cron`, `0 0 * * *`), was unscheduled on
-August 13, 2026. It had never worked: its URL was the literal, unsubstituted
-placeholder `https://<REFERENCE_ID>.supabase.co/functions/v1/daily-reset`, a
-hostname that has never resolved, pointing at a Supabase Edge Function that was
-never deployed. (Earlier revisions of this file claimed it failed by reading an
-unset GUC and sending an empty `Bearer ` — that diagnosis was wrong. The
-conclusion, that the job was dead, was right.)
-
-## 7. Arena Scoring Rules
-
-Arena scoring uses recent archived logs and streaks.
-
-The score calculation lives in [src/lib/arena.ts](/Users/jashanubhi/Desktop/coding/elite/src/lib/arena.ts).
-
-Current scoring behavior:
-
-- built from latest 7 logs
-- uses:
-  - non-negotiable compliance
-  - daily habit completion
-  - streak factor
-- leaderboard sorts by:
-  - score descending
-  - XP descending
-  - username ascending
-
-## 8. Auth / Profile Flow
-
-Current behavior:
-
-- register with email + password + username
-- username is validated client-side, then checked for availability against
-  `POST /api/auth/check-username`
-- `signUp` writes the username into auth metadata; the `on_auth_user_created`
-  trigger reads it and creates the `operator_profile` row in the same
-  transaction as the account
-- login loads app state from Supabase
-- **the client never creates the profile row.** If `fetchSystemState` finds no
-  profile, that is an error condition and the app shows a retry screen — it
-  does not attempt to self-heal by inserting one
-
-Important notes:
-
-- runtime username auto-generation was intentionally removed after the required-signup-username change
-- future changes should avoid silently generating usernames again unless the user explicitly requests that behavior
-- the trigger's collision suffixing is *not* a violation of that rule: it is a
-  last-resort uniqueness guarantee inside a transaction, not a UX affordance.
-  It exists because the alternative — failing the insert — produced auth
-  accounts with no profile row and an unescapable loading screen.
-- `fetchSystemState` returns its state rather than committing it, so a single
-  `finally` clears the loading flag on every exit path. Preserve that shape.
-  The previous version had early returns that skipped `setLoading(false)`,
-  which is what made the failure permanent rather than merely visible.
-
-## 9. Known Historical Milestones
-
-Recent major implementation history from git:
-
-- `609c4ca` fixed reset logic
-- `bb912e9` / `74f6dcb` daily reset login work
-- `6acaf71` speed up boot animation and remove Wasted Potential card
-- `e5f3466` replaced Ghost arena with friends-based competition
-- `9f8ba26` required signup usernames and added profile tab
-- `e6d431a` limited logs to weekly view and monthly retention
-- `d5d68ff` added the unit test suite for reset and arena logic
-- `a41c845` Phase 0 hardening: friends access, signup, daily reset
-
-This timeline is useful when tracing why certain product decisions exist.
-
-## 10. Current App Navigation
-
-Current tabs:
-
-- dashboard
-- objectives
-- arena
-- habits
-- logs
-- profile
-
-Relevant files:
-
-- [src/app/page.tsx](/Users/jashanubhi/Desktop/coding/elite/src/app/page.tsx)
-- [src/components/Sidebar.tsx](/Users/jashanubhi/Desktop/coding/elite/src/components/Sidebar.tsx)
-
-## 11. Testing That Has Already Been Done
-
-The project has already had several rounds of verification during previous work:
-
-- lint / build verification after major changes
-- API security checks confirming unauthorized friend endpoints return `401`
-- end-to-end backend verification for Arena lifecycle:
-  - create temporary users
-  - send request
-  - accept request
-  - verify leaderboard
-  - remove friend
-  - verify cleanup
-
-That backend E2E flow passed successfully during prior work. Note that it left
-a synthetic `ghost.e2e.*@elite.local` account behind, which was found and
-deleted during Phase 0 — if you write another E2E flow, verify its cleanup
-actually cleans up.
-
-As of Phase 0 there is also an automated suite (`npm test`, 35 tests) plus
-verification that:
-
-- all five friends endpoints return `401` unauthenticated and with a forged
-  bearer token
-- `/api/system/reset` returns `401` with no secret and with a wrong one
-- registration rejects a taken username with an inline error and issues **zero**
-  Supabase requests — the regression test for the bricked-signup bug
-
-## 12. Current Risks / Things Future Agents Should Be Careful About
-
-- Do not reintroduce anonymous Ghost behavior unless explicitly requested.
-- Do not remove legacy Ghost columns unless the user asks for schema cleanup.
-- Be careful with `daily_logs` changes because they affect:
-  - logs UI
-  - dashboard chart
-  - Arena scoring
-- Be careful with username logic because it affects:
-  - signup
-  - friend search
-  - leaderboard display
-  - Profile edit flow
-- Be careful with reset logic because it is timezone-aware and easy to break.
-- **Never resurrect the deleted `.sql` files from git history and run them.**
-  `fix-permissions.sql` and `grants.sql` in particular re-grant privileges
-  Phase 0 deliberately revoked and would reopen the friendship data-exposure
-  hole. They are history, not a toolbox. See section 5.
-- Do not "fix" a cross-user read problem by loosening an RLS SELECT policy or
-  adding an `anon` grant. The anon key ships to every browser. Route it through
-  a server endpoint with `supabaseAdmin` instead — that is why
-  `/api/auth/check-username` exists.
-- `formatError` in
-  [src/app/api/friends/_lib.ts](/Users/jashanubhi/Desktop/coding/elite/src/app/api/friends/_lib.ts)
-  concatenates the Postgres `message | details | hint | code`, and every route
-  returns it to the browser on a 500. That leaks constraint names, column names
-  and query hints. Scheduled to be fixed alongside error monitoring; do not
-  copy the pattern into new routes.
-- **Never key an effect on the `user` or `session` *object* from `AuthContext`.**
-  That context calls `setUser(s?.user ?? null)` on every `onAuthStateChange`
-  event, minting a fresh object even when nothing changed. On August 13, 2026
-  this put the app in a permanent request storm: the system-state load effect
-  and the friends-arena effect both re-ran on every auth event, and each re-run
-  issued Supabase requests that themselves settled the auth state, firing the
-  next event. Measured at 72 fetches in 5 seconds while idle — 8 complete
-  re-runs of `fetchSystemState` plus 16 calls each to two API routes. Always
-  depend on `user?.id` and `session?.access_token`, which are stable primitives.
-  The symptom is easy to misread as "the preview is slow" or "that's just
-  StrictMode double-invoking"; it is neither. Measure with a `window.fetch`
-  counter before believing either explanation.
-
-### The economy is server-authoritative — do not undo this
-
-**Closed on August 14, 2026 by Phase 5.** This used to succeed from any
-logged-in browser and now returns `42501`:
-
-```js
-supabase.from('operator_profile').update({ xp: 999999, streak: 9999 }).eq('id', myId)
+```
+browser (anon key, RLS)          server routes (service_role)
+  titles, descriptions      →      xp, streak, completed_today,
+  username                         progress, status, daily_logs,
+  create/delete rows               last_check_in, last_habit_reset
 ```
 
-Verified against production: attempts to inflate XP, inflate streak, forge a
-`daily_logs` row, mark a habit complete, complete an objective, or forge a
-friendship all return `42501 permission denied`.
+The economy arithmetic itself lives in [src/lib/economy.ts](src/lib/economy.ts)
+— pure, dependency-free, isomorphic — and is imported by *both* sides, so client
+optimism and server truth cannot drift. Constants (15 / 30 / 500 / 200 / step
+10) exist there and nowhere else.
 
-`authenticated` now holds only:
+### What `authenticated` can still write
 
 | Table | Access |
 |---|---|
 | `operator_profile` | SELECT + `username` UPDATE |
-| `daily_logs` | SELECT |
-| `friendships`, `friend_requests` | SELECT |
-| `daily_habits`, `non_negotiables` | SELECT, DELETE + `title`/`user_id` |
-| `objectives` | SELECT, DELETE + `type`/`title`/`description`/`user_id` |
+| `daily_logs` | SELECT only |
+| `friendships`, `friend_requests` | SELECT only |
+| `daily_habits`, `non_negotiables` | SELECT, DELETE + INSERT/UPDATE on `title` (+`user_id` on insert) |
+| `objectives` | SELECT, DELETE + INSERT/UPDATE on `type`/`title`/`description` (+`user_id`) |
 
-Everything else goes through `src/app/api/economy/*` and `/api/system/sync`,
-which run as `service_role`. The rules that follow from that:
+Everything else returns `42501`. Verified against production on August 14, 2026:
+attempts to inflate XP, inflate streak, forge a `daily_logs` row, mark a habit
+complete, complete an objective, or forge a friendship **all fail**.
 
-- **Never widen these grants to fix a client error.** A `42501` from the
-  browser means client code is writing something the server owns; move the
-  write to a route instead.
-- **`supabase test db` is the guard.** `supabase/tests/phase5_lockdown.test.sql`
-  asserts all of the above as 20 pgTAP tests. It is negative-tested — re-granting
-  UPDATE on `operator_profile` makes it fail — so a green run is meaningful.
-  Run it before and after any grant or policy change.
-- **`npm run preflight:phase5`** audits client source for writes to
-  server-owned columns. Run it before touching `EliteContext`.
+### Rules that follow
 
-## 13. If You Need To Run The App
-
-Typical commands:
-
-```bash
-npm run dev -- --port 3002
-```
-
-Other useful commands:
-
-```bash
-npm run lint
-npm run build
-npm test
-```
-
-`npm test` runs the pure-logic unit suite with Node's built-in test runner
-(no test framework dependency). Tests live next to their subject as
-`src/lib/*.test.ts` and cover [src/lib/daily-reset.ts](/Users/jashanubhi/Desktop/coding/elite/src/lib/daily-reset.ts)
-and [src/lib/arena.ts](/Users/jashanubhi/Desktop/coding/elite/src/lib/arena.ts).
-Nothing in the suite touches Supabase, so it is safe to run at any time.
-
-## 14. If You Need To Push Schema Changes
-
-**Do not add another hand-run `.sql` file.** That workflow is what produced the
-divergence Phase 1 spent a day reconciling. The migration flow is now live:
-
-```bash
-supabase migration new <name>   # creates supabase/migrations/<ts>_<name>.sql
-# edit it
-supabase db reset               # rebuild locally from scratch and verify
-supabase db push                # apply to production
-```
-
-`supabase db reset` is the cheap safety net — it replays every migration onto an
-empty database, so it catches ordering mistakes and typos before production
-does. Run it every time.
-
-Two caveats that have already caused problems:
-
-- **Anything outside the `public` schema needs a hand-written migration.**
-  `db pull` will not capture triggers on `auth.users`, `pg_cron` jobs, or
-  storage policies. See section 5.
-- **The CLI must be authenticated** (`supabase login`, or `SUPABASE_ACCESS_TOKEN`
-  exported) and linked (`supabase link --project-ref mfrffkbbkiiznbgwqxdw`).
-  On macOS the keychain prompt asks for your *Mac login password*, not a
-  Supabase one.
-
-Whatever the mechanism, a DB change usually needs matching updates in:
-
-- client assumptions in [src/context/EliteContext.tsx](/Users/jashanubhi/Desktop/coding/elite/src/context/EliteContext.tsx)
-- API route assumptions in [src/app/api](/Users/jashanubhi/Desktop/coding/elite/src/app/api)
-- this file, if it changes a security boundary or a product rule
-
-Grant changes specifically: revoking a privilege the client currently relies on
-will break the app at runtime with a `42501`, and TypeScript will not warn you.
-Check what writes that table first — every browser write in the app lives in
-`EliteContext.tsx`, so that one file is the complete list.
-
-## 15. Current Source Map
-
-Useful entry points:
-
-- App shell:
-  - [src/app/page.tsx](/Users/jashanubhi/Desktop/coding/elite/src/app/page.tsx)
-- Global auth:
-  - [src/context/AuthContext.tsx](/Users/jashanubhi/Desktop/coding/elite/src/context/AuthContext.tsx)
-  - [src/app/api/auth/check-username/route.ts](/Users/jashanubhi/Desktop/coding/elite/src/app/api/auth/check-username/route.ts)
-- Server-side auth guard for API routes:
-  - [src/app/api/friends/_lib.ts](/Users/jashanubhi/Desktop/coding/elite/src/app/api/friends/_lib.ts) — `requireUserFromBearer`
-- Tests:
-  - [src/lib/daily-reset.test.ts](/Users/jashanubhi/Desktop/coding/elite/src/lib/daily-reset.test.ts)
-  - [src/lib/arena.test.ts](/Users/jashanubhi/Desktop/coding/elite/src/lib/arena.test.ts)
-- Global app state:
-  - [src/context/EliteContext.tsx](/Users/jashanubhi/Desktop/coding/elite/src/context/EliteContext.tsx)
-- Reset logic:
-  - [src/lib/daily-reset.ts](/Users/jashanubhi/Desktop/coding/elite/src/lib/daily-reset.ts)
-  - [src/app/api/system/reset/route.ts](/Users/jashanubhi/Desktop/coding/elite/src/app/api/system/reset/route.ts)
-- Arena logic:
-  - [src/lib/arena.ts](/Users/jashanubhi/Desktop/coding/elite/src/lib/arena.ts)
-  - [src/components/GhostView.tsx](/Users/jashanubhi/Desktop/coding/elite/src/components/GhostView.tsx)
-- Logs:
-  - [src/components/LogsView.tsx](/Users/jashanubhi/Desktop/coding/elite/src/components/LogsView.tsx)
-- Profile:
-  - [src/components/ProfileView.tsx](/Users/jashanubhi/Desktop/coding/elite/src/components/ProfileView.tsx)
-
-## 16. Short Status Snapshot
-
-As of August 13, 2026:
-
-- friends-based Arena is live
-- username-at-signup flow is live
-- Profile tab is live
-- logs are weekly-first in UI
-- monthly log retention strategy is implemented, enforced by a `pg_cron` job
-- unit test suite is live (`npm test`, 35 tests, no framework dependency)
-- Phase 0 hardening is applied to production, in both code and database
-- **Phases 1-5 are complete.** The schema is under `supabase/migrations/`; the
-  XP economy is a tested kernel (`src/lib/economy.ts`) shared by client and
-  server; XP, streaks, habit completion and objective progress are written only
-  by API routes; and the client's grants on those columns are revoked. The
-  devtools XP exploit is dead.
-- the auth-state request storm is fixed — see the note in section 12
-- the app is being taken from "personal tool" to "public signups"; Phases 6-8
-  remain — auth hardening, CI/monitoring/rate limiting, and GDPR plus the
-  Arena scoring fix (section 18)
-
-## 17. Known Configuration Issues
-
-- `supabase/config.toml` configures the **local** dev stack only. Editing
-  `site_url` there does nothing to production — hosted auth settings live in
-  the Supabase dashboard. It currently reads `http://127.0.0.1:3000`.
-- `enable_confirmations = false`, while
-  [OperatorLogin.tsx](/Users/jashanubhi/Desktop/coding/elite/src/components/OperatorLogin.tsx)
-  tells the user to check their email to confirm. One of the two must change;
-  the decision is to turn confirmation on.
-- `minimum_password_length = 6`, matched by `minLength={6}` in the UI. If you
-  raise one, raise the other or client and server disagree.
-- No CAPTCHA. Public signup plus working SMTP without one is an open email relay
-  pointed at your own domain reputation.
-- The CSP in [next.config.ts](/Users/jashanubhi/Desktop/coding/elite/next.config.ts)
-  will silently block Turnstile and Sentry if either is added — they need
-  `script-src`/`frame-src` and `connect-src` entries respectively. CSP failures
-  only surface in the browser console.
-- No CI. `npm test` only protects what someone remembers to run.
-
-## 18. Production-Readiness Roadmap
-
-The full plan lives at
-`~/.claude/plans/lets-make-a-plan-bright-hopper.md`. Summary of remaining work,
-in dependency order — the ordering is load-bearing, not preference:
-
-1. ~~**Phase 1 — migration baseline.**~~ **Done, August 13, 2026.** Baseline
-   pulled from production, auth trigger pinned by a second migration, verified
-   by a from-scratch local rebuild, `db diff --linked --schema public` clean,
-   eleven legacy `.sql` files deleted, dead `daily-system-reset` cron job
-   unscheduled. See sections 5 and 6.
-2. **Phase 2 — economy kernel.** New `src/lib/economy.ts` holding the XP
-   constants currently inlined in `EliteContext` (15/30/500/200) plus the
-   toggle and objective-progress calculations. Pure, tested, isomorphic.
-3. **Phase 3 — server-authoritative routes.** `POST /api/economy/habit/toggle`,
-   `POST /api/economy/objective/progress`, and `POST /api/system/sync`, the last
-   of which moves the login-time reset server-side. Compare-and-swap on the
-   habit flip and the XP write, so a double-tap or a second tab cannot double
-   award. Additive — deploys with the client still writing directly.
-4. **Phase 4 — client switchover.** Rewrite the writes in `EliteContext`,
-   reconcile from server responses, fix the seven error-swallowing `.then(() => {})`
-   writes, and ship a build-version reload banner **before** Phase 5.
-5. ~~**Phase 5 — database lockdown.**~~ **Done, August 14, 2026.** Column-level
-   grants, `WITH CHECK` on all five UPDATE policies, 12 CHECK constraints,
-   per-operator row caps, and `daily_logs` writes revoked entirely. Verified
-   against production: six separate exploit attempts all return `42501`, and
-   every legitimate write still works. See section 12.
-6. **Phase 6 — auth hardening.** Password reset, email confirmation, CAPTCHA,
-   real SMTP.
-7. **Phase 7 — CI, error monitoring, rate limiting.**
-8. **Phase 8 — GDPR (delete/export) and the Arena scoring fix.**
-
-The Arena scoring bug in Phase 8 is worth understanding early because a test
-documents it: `getCompletionRate` returns `null` for an empty category and the
-weights renormalize, so an operator tracking **one** habit scores 100 while one
-tracking five non-negotiables and five habits at 80% scores 84. Tracking less
-raises your ceiling. `src/lib/arena.test.ts` asserts the current behaviour and
-will fail loudly when it is fixed — that failure is the signal, not a
-regression.
+- **Never widen a grant to fix a client error.** A `42501` in the browser means
+  client code is writing something the server owns. Move the write to a route.
+- **Never re-grant write access on `friendships` / `friend_requests`.** See §4.
+- **Run `supabase test db` around any grant or policy change.** The 20 pgTAP
+  assertions in
+  [supabase/tests/phase5_lockdown.test.sql](supabase/tests/phase5_lockdown.test.sql)
+  attempt each forbidden write and assert `42501`. Negative-tested: re-granting
+  UPDATE on `operator_profile` makes it fail, so a green run means something.
+- **Run `npm run preflight:phase5` before touching `EliteContext`.** It audits
+  client source for writes to server-owned columns.
 
 ---
 
-This file should be updated whenever a significant product, database, or operational change is made.
+## 3. Settled product decisions
+
+Treat as current intent unless the user says otherwise.
+
+- Arena is **friends-based**, not anonymous. Do not reintroduce Ghost mode.
+- Username is **required at signup**, 3–24 chars, `[a-z0-9_]`. Enforced in the
+  UI, in `/api/auth/check-username`, and by a CHECK constraint — the database is
+  the authority.
+- **No runtime username auto-generation.** The signup trigger's collision
+  suffixing (`name`, `name_2`, …) is not a violation of this: it is a
+  last-resort uniqueness guarantee inside the account-creation transaction, not
+  a UX affordance. It exists because the alternative — failing the insert —
+  produced auth accounts with no profile row and an unescapable spinner.
+- Username editing lives in the **Profile tab**, not the Arena.
+- `daily_logs` retention is a **rolling ~30 days**. The database is deliberately
+  not a long-term warehouse; anything depending on logs must assume short
+  history.
+- Logs UI is weekly-first: 7 shown, `MORE (n)` expands the rest of the retained
+  window.
+- Legacy `ghost_opt_in` / `ghost_opted_in_at` columns stay unless schema cleanup
+  is explicitly requested.
+
+---
+
+## 4. Database
+
+Seven tables, RLS enabled on all: `operator_profile`, `objectives`,
+`daily_habits`, `non_negotiables`, `daily_logs`, `friend_requests`,
+`friendships`. Every one FKs `auth.users(id) ON DELETE CASCADE`, so account
+deletion cascades completely (relevant to the Phase 8 GDPR work).
+
+**`operator_profile`** — `id`, `username`, `xp`, `streak`, `last_check_in`,
+`last_habit_reset`, `timezone`, `initialized_at`, `created_at`, plus the legacy
+Ghost columns. Created by the `on_auth_user_created` trigger, **never** by the
+client.
+
+**`friendships`** — accepted relationships as a canonical low/high pair
+(`user_low_id` < `user_high_id`).
+
+> **Write access is service-role only, and this is a security boundary.** The
+> original INSERT policy only checked that the caller was one of the two people
+> in the pair, so any authenticated user could insert `(self, victim)` through
+> the anon-key client and then read that victim's username, XP, streak and full
+> `daily_logs` from the leaderboard — no request, no consent. The same applies
+> to `friend_requests`. All mutations go through `src/app/api/friends/`.
+
+[leaderboard/route.ts](src/app/api/friends/leaderboard/route.ts) additionally
+cross-checks every friendship against an accepted `friend_requests` row and logs
+`[FRIENDSHIP_WITHOUT_ACCEPTED_REQUEST]` for any that fail. That is a deliberate
+tripwire: if it fires, someone has write access they should not have.
+
+Known gap in that tripwire: `remove/route.ts` cancels only *pending* requests on
+unfriend, leaving the `accepted` row behind. Re-adding still works (both guards
+check for a pending row, not an accepted one), but a forged friendship with
+someone previously unfriended would pass the cross-check.
+
+**`daily_logs`** — archived day summaries, feeding the logs UI, the dashboard XP
+chart, and Arena scoring. `(user_id, date)` is UNIQUE; both upsert call sites
+depend on it.
+
+### Migrations
+
+**The schema lives in `supabase/migrations/` and nowhere else.** Eleven hand-run
+`.sql` files were deleted on August 13, 2026. Git has them for archaeology.
+
+> **Do not resurrect and run them.** `fix-permissions.sql` and `grants.sql` would
+> re-grant exactly what Phases 0 and 5 revoked and silently reopen both the
+> friendship data-exposure hole and the XP exploit.
+
+| Migration | What it is |
+|---|---|
+| `20260813080640_remote_schema` | Baseline, captured with `db pull` against production. *Reality*, not an idealised schema — it contains the `daily_logs_user_date_idx` unique index that existed in production but in no repo file. |
+| `20260813080755_auth_user_profile_trigger` | The `on_auth_user_created` trigger. Hand-written because `db pull` captures `public` only. |
+| `20260813223458_phase5_lockdown` | Column-level grants, `WITH CHECK` on all five UPDATE policies, 12 CHECK constraints, per-operator row caps. |
+
+#### The blind spot that bit twice
+
+`db pull` does **not** see the `auth`, `cron`, or `storage` schemas. Two things
+lived there and were nearly lost: the signup trigger (now pinned by its own
+migration) and the `pg_cron` jobs (still not in any migration — see below).
+Anything outside `public` needs a hand-written migration.
+
+#### Scheduled jobs — not in any migration
+
+Audited August 13, 2026 via `select jobid, jobname, schedule, command from cron.job;`
+
+- **`eliteos-log-retention`** (`pg_cron`, `15 1 * * *`) — **live and
+  load-bearing.** Runs `delete from daily_logs where date < (current_date -
+  interval '1 month')`. Do not remove. Known cosmetic flaw: compares against
+  `current_date` (UTC) while log dates are written in each operator's local day,
+  so someone well ahead of UTC can lose a log a few hours early.
+- **Vercel cron** (`vercel.json`, `0 * * * *`) — hits `/api/system/reset`
+  hourly. **The real reset scheduler.** The `last_habit_reset === today` guard
+  makes it idempotent, so hourly is safe and closes the timezone-lateness
+  window.
+
+A third job, `daily-system-reset`, was unscheduled on August 13, 2026. It had
+never worked: its URL was the literal unsubstituted placeholder
+`https://<REFERENCE_ID>.supabase.co/functions/v1/daily-reset`. (Earlier notes
+blamed an unset GUC — that diagnosis was wrong, the conclusion was right.)
+
+---
+
+## 5. Traps that have already cost real time
+
+- **Never key an effect on the `user` or `session` *object* from `AuthContext`.**
+  That context calls `setUser(s?.user ?? null)` on every `onAuthStateChange`
+  event, minting a fresh object even when nothing changed. On August 13, 2026
+  this produced a permanent request storm: effects re-ran on every auth event,
+  and each re-run issued Supabase requests that themselves settled the auth
+  state. Measured at **72 fetches in 5 seconds while idle**. Always depend on
+  `user?.id` and `session?.access_token` — stable primitives. The symptom reads
+  as "the preview is slow" or "StrictMode double-invoking"; it is neither.
+  Measure with a `window.fetch` counter before believing either.
+- **`fetchSystemState` returns its state rather than committing it**, so a
+  single `finally` clears the loading flag on every exit path. Preserve that
+  shape. An earlier version had early returns that skipped `setLoading(false)`,
+  which turned a visible failure into a permanent spinner.
+- **The client never creates the profile row.** A missing profile is an error
+  state showing a retry screen, not something to self-heal by inserting one —
+  that insert is what used to brick accounts.
+- **Do not fix a cross-user read problem by loosening an RLS SELECT policy or
+  adding an `anon` grant.** The anon key ships to every browser. Route it
+  through a server endpoint with `supabaseAdmin`; that is why
+  `/api/auth/check-username` exists.
+- **`formatError`** in [_lib/guard.ts](src/app/api/_lib/guard.ts) concatenates
+  the Postgres `message | details | hint | code`, leaking constraint and column
+  names. The economy routes log it and return a fixed string; the five older
+  friends routes still return it to the browser on a 500. Fix in Phase 7; do not
+  copy the pattern.
+- **Seven writes used to end in `.then(() => {})`**, making failure completely
+  invisible — a delete that never reached the database still vanished from the
+  UI and reappeared on next load. They now await, roll back, and toast. Do not
+  reintroduce fire-and-forget writes.
+- **PostgREST renders `.eq(col, null)` as `col=eq.null`, which matches nothing.**
+  Use `.is(col, null)`. This bit the reset's compare-and-swap guard, where a
+  first-ever reset would otherwise always lose its own race.
+- **`zod`'s `.uuid()` enforces RFC 4122 variant bits**, so `1111...1111` is
+  rejected as malformed rather than reaching a 404 path. Use real v4 UUIDs in
+  tests.
+- Be careful with **`daily_logs`** (logs UI + dashboard chart + Arena scoring),
+  **username logic** (signup, friend search, leaderboard, profile edit), and
+  **reset logic** (timezone-aware and easy to break).
+
+---
+
+## 6. Auth and profile flow
+
+1. Register with email + password + username.
+2. Username validated client-side, then checked against
+   `POST /api/auth/check-username`, which uses the service-role key. A
+   client-side check is structurally impossible — the browser cannot read other
+   operators' profiles, so an earlier one ran as `anon`, matched zero rows under
+   RLS, and reported every username as available. **The check is advisory; the
+   database is the authority.**
+3. `signUp` writes the username into auth metadata; the `on_auth_user_created`
+   trigger reads it and creates `operator_profile` in the same transaction.
+4. On login, `EliteContext` POSTs `/api/system/sync`, which performs the daily
+   reset if due and returns authoritative state. Everything else the context
+   does on load is a SELECT.
+
+**Not implemented:** password reset (a forgotten password is currently an
+**unrecoverable lockout**), email change, account deletion, data export. Email
+confirmation is configured off — see §9.
+
+---
+
+## 7. Arena scoring
+
+Lives in [src/lib/arena.ts](src/lib/arena.ts). Built from the latest 7 archived
+logs; combines non-negotiable compliance (50%), habit completion (30%), and a
+streak factor (20%, clamped at 7 days). A score is withheld until 7 days exist.
+Leaderboard sorts by score desc, XP desc, username asc; unscored operators sink
+below every scored one.
+
+> **Known bug, raised to P1.** `getCompletionRate` returns `null` for an empty
+> category and the weights renormalize, so an operator tracking **one** habit
+> scores 100 while one tracking five non-negotiables and five habits at 80%
+> scores 84. **Tracking less raises your ceiling** — on a competitive
+> leaderboard that is the feature being wrong, not a rounding issue.
+> [arena.test.ts](src/lib/arena.test.ts) asserts the *current* behaviour and
+> will fail loudly when this is fixed. That failure is the signal, not a
+> regression. Fix by flooring the denominator (`/ Math.max(items.length, 3)`).
+
+---
+
+## 8. Commands
+
+```bash
+npm run dev -- --port 3002
+npm run lint
+npm run build
+npm test                  # 75 tests, Node's built-in runner, no framework
+npm run preflight:phase5  # audits client source for server-owned column writes
+```
+
+`npm test` covers `src/**/*.test.ts`: the economy kernel, daily-reset and arena
+logic, and the economy route handlers (against an in-memory fake `EconomyDb`, so
+nothing touches Supabase). Safe to run any time.
+
+Database tests need Docker running:
+
+```bash
+supabase start
+supabase test db          # 20 pgTAP assertions on the grant matrix
+supabase stop --no-backup
+```
+
+### Schema changes
+
+**Do not add another hand-run `.sql` file** — that workflow produced the
+divergence Phase 1 spent a day reconciling.
+
+```bash
+supabase migration new <name>
+# edit the generated file
+supabase db reset               # rebuild locally from scratch — run every time
+supabase test db                # confirm the grant matrix still holds
+supabase db push                # apply to production
+```
+
+Caveats that have already caused problems:
+
+- Anything outside `public` needs a hand-written migration (see §4).
+- The CLI must be authenticated (`supabase login`, or `SUPABASE_ACCESS_TOKEN`)
+  and linked (`supabase link --project-ref mfrffkbbkiiznbgwqxdw`). On macOS the
+  keychain prompt asks for your **Mac login password**, not a Supabase one.
+- **The database password is not currently known**, so schema changes have been
+  applied through the dashboard SQL editor. If you do that, record it manually
+  or the ledger drifts:
+  ```sql
+  insert into supabase_migrations.schema_migrations (version, name)
+  values ('<timestamp>', '<name>') on conflict (version) do nothing;
+  ```
+  Reset the password at Project Settings → Database when convenient; the app
+  uses the anon and service-role keys, not this password, so resetting it breaks
+  nothing.
+
+A schema change usually needs matching updates in
+[EliteContext.tsx](src/context/EliteContext.tsx), the routes under
+[src/app/api](src/app/api), and this file.
+
+---
+
+## 9. Known configuration issues
+
+- `supabase/config.toml` configures the **local** stack only. Editing `site_url`
+  there does nothing to production — hosted auth settings live in the dashboard.
+- `enable_confirmations = false`, while
+  [OperatorLogin.tsx](src/components/OperatorLogin.tsx) tells the user to check
+  their email. One of the two must change; the decision is to turn confirmation
+  on.
+- `minimum_password_length = 6`, matched by `minLength={6}` in the UI. Raise
+  both or neither.
+- **No CAPTCHA.** Public signup plus working SMTP without one is an open email
+  relay pointed at your own domain reputation.
+- The CSP in [next.config.ts](next.config.ts) will **silently** block Turnstile
+  and Sentry — they need `script-src`/`frame-src` and `connect-src` entries.
+  CSP failures surface only in the browser console.
+- **No CI.** `npm test` protects only what someone remembers to run.
+- The build-version banner (`x-app-build` → reload prompt) only protects tabs
+  loaded since Phase 4 shipped. Older tabs run JS that never checks the header.
+
+---
+
+## 10. Source map
+
+- **App shell** — [page.tsx](src/app/page.tsx),
+  [Sidebar.tsx](src/components/Sidebar.tsx),
+  [Dashboard.tsx](src/components/Dashboard.tsx) (view router)
+- **Global state** — [EliteContext.tsx](src/context/EliteContext.tsx) *(the
+  single largest file; all browser writes live here)*
+- **Auth** — [AuthContext.tsx](src/context/AuthContext.tsx),
+  [check-username/route.ts](src/app/api/auth/check-username/route.ts)
+- **API guard** — [_lib/guard.ts](src/app/api/_lib/guard.ts) —
+  `requireUserFromBearer`, `parseJsonBody`, `serverError`. *(Phase 7 hangs rate
+  limiting here — it runs after the bearer resolves, so budgets key on user id.)*
+  [friends/_lib.ts](src/app/api/friends/_lib.ts) is a re-export shim.
+- **Economy kernel** — [economy.ts](src/lib/economy.ts) + tests
+- **Economy routes** — [habit/toggle](src/app/api/economy/habit/toggle/handler.ts),
+  [objective/progress](src/app/api/economy/objective/progress/handler.ts),
+  [_db.ts](src/app/api/economy/_db.ts) (the `EconomyDb` port),
+  [_fake-db.ts](src/app/api/economy/_fake-db.ts) (in-memory test double).
+  Handlers are pure and injectable; `route.ts` files are thin.
+- **Reset** — [run-daily-reset.ts](src/lib/server/run-daily-reset.ts) (shared),
+  [daily-reset.ts](src/lib/daily-reset.ts) (pure helpers),
+  [system/reset](src/app/api/system/reset/route.ts) (cron sweep),
+  [system/sync](src/app/api/system/sync/route.ts) (login-time)
+- **Arena** — [arena.ts](src/lib/arena.ts),
+  [GhostView.tsx](src/components/GhostView.tsx) *(still named Ghost; renders the
+  Arena)*, five routes under [src/app/api/friends](src/app/api/friends)
+- **Views** — [HabitsView](src/components/HabitsView.tsx),
+  [ObjectivesView](src/components/ObjectivesView.tsx),
+  [LogsView](src/components/LogsView.tsx),
+  [ProfileView](src/components/ProfileView.tsx)
+- **Database** — [supabase/migrations](supabase/migrations),
+  [supabase/tests](supabase/tests)
+
+---
+
+## 11. Status and roadmap
+
+The full plan lives at `~/.claude/plans/lets-make-a-plan-bright-hopper.md`.
+
+**Done (August 11–14, 2026).** Phases 0–5:
+
+| Phase | Outcome |
+|---|---|
+| 0 | Friendship forgery closed; signup un-bricked; `anon` grants revoked; hourly cron; resilient reset loop |
+| 1 | Schema under `supabase/migrations/`; repo and production reconciled; legacy `.sql` deleted |
+| 2 | XP economy extracted to a tested, isomorphic kernel |
+| 3 | Server-authoritative routes with compare-and-swap (additive) |
+| 4 | Client switched over; swallowed writes fixed; build-version tripwire |
+| 5 | Column-level grants, `WITH CHECK`, CHECK constraints, row caps, pgTAP |
+
+Also fixed along the way: the auth-state request storm (§5).
+
+**Remaining**, in dependency order:
+
+6. **Auth hardening.** Password reset (currently a total lockout) — add
+   `requestPasswordReset` / `updatePassword` to `AuthContext`, a third mode in
+   `OperatorLogin`, and a `/reset-password` page guarded on the
+   `PASSWORD_RECOVERY` event. Identical success message whether or not the email
+   exists, to avoid enumeration. Then email confirmation on, real SMTP (Resend —
+   Supabase's built-in is rate-limited and not for production), CAPTCHA
+   (Turnstile; the `[auth.captcha]` block is stubbed), `site_url` +
+   `additional_redirect_urls` in the **dashboard**, and raise
+   `auth.rate_limit.email_sent` from its dev default of 2/hour.
+7. **CI, monitoring, rate limiting.** GitHub Actions on Node 22 running lint /
+   typecheck / test / build plus `supabase test db` — the only thing that will
+   stop a `grants.sql`-shaped file in six months. Sentry. `@upstash/ratelimit`
+   in `guard.ts` (not middleware). Fix the `formatError` leak.
+8. **Compliance and the Arena fix.** `POST /api/account/delete` via
+   `supabaseAdmin.auth.admin.deleteUser` (the FK cascade is complete),
+   `GET /api/account/export`, privacy policy and terms, cleanup of unconfirmed
+   accounts older than 7 days. Plus the Arena scoring bug in §7.
+
+### Live operational notes
+
+- 13 registered operators.
+- **Every operator's XP sits at or near 0.** Max daily earn is 75 (2 NNs + 1
+  habit); max daily penalty is 120 (2 × 60). The economy is net-negative unless
+  everything is completed, and XP floors at 0, so penalties are both invisible
+  and permanent. Nobody has ever accumulated. This is a product question, not a
+  bug — but the leaderboard currently ranks everyone at 0.
+- The zero floor is lossy in the other direction too: an operator at 10 XP who
+  toggles a habit off and back on lands on 15, a net gain of 5. Bounded, and
+  documented by a test in [economy.test.ts](src/lib/economy.test.ts). Closing it
+  means deciding whether XP may go negative.
