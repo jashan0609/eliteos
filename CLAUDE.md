@@ -525,21 +525,41 @@ verification that:
   StrictMode double-invoking"; it is neither. Measure with a `window.fetch`
   counter before believing either explanation.
 
-### Known-open security gap
+### The economy is server-authoritative — do not undo this
 
-**XP and streaks are still client-writable.** `authenticated` holds table-wide
-UPDATE on `operator_profile` and INSERT on `daily_logs`, so any logged-in user
-can run this from devtools and it will succeed:
+**Closed on August 14, 2026 by Phase 5.** This used to succeed from any
+logged-in browser and now returns `42501`:
 
 ```js
 supabase.from('operator_profile').update({ xp: 999999, streak: 9999 }).eq('id', myId)
 ```
 
-Arena scores are forgeable by the same route. This is known and sequenced, not
-overlooked: the grants cannot be revoked until the server routes that replace
-those writes exist, because the login-time reset in `EliteContext` writes `xp`,
-`streak`, `last_habit_reset`, per-habit streaks, and `daily_logs` directly. See
-section 18.
+Verified against production: attempts to inflate XP, inflate streak, forge a
+`daily_logs` row, mark a habit complete, complete an objective, or forge a
+friendship all return `42501 permission denied`.
+
+`authenticated` now holds only:
+
+| Table | Access |
+|---|---|
+| `operator_profile` | SELECT + `username` UPDATE |
+| `daily_logs` | SELECT |
+| `friendships`, `friend_requests` | SELECT |
+| `daily_habits`, `non_negotiables` | SELECT, DELETE + `title`/`user_id` |
+| `objectives` | SELECT, DELETE + `type`/`title`/`description`/`user_id` |
+
+Everything else goes through `src/app/api/economy/*` and `/api/system/sync`,
+which run as `service_role`. The rules that follow from that:
+
+- **Never widen these grants to fix a client error.** A `42501` from the
+  browser means client code is writing something the server owns; move the
+  write to a route instead.
+- **`supabase test db` is the guard.** `supabase/tests/phase5_lockdown.test.sql`
+  asserts all of the above as 20 pgTAP tests. It is negative-tested — re-granting
+  UPDATE on `operator_profile` makes it fail — so a green run is meaningful.
+  Run it before and after any grant or policy change.
+- **`npm run preflight:phase5`** audits client source for writes to
+  server-owned columns. Run it before touching `EliteContext`.
 
 ## 13. If You Need To Run The App
 
@@ -638,12 +658,15 @@ As of August 13, 2026:
 - monthly log retention strategy is implemented, enforced by a `pg_cron` job
 - unit test suite is live (`npm test`, 35 tests, no framework dependency)
 - Phase 0 hardening is applied to production, in both code and database
-- **Phase 1 is complete**: the schema is under `supabase/migrations/`, the
-  eleven hand-run `.sql` files are deleted, and repo and production are
-  reconciled (`db diff` reports no changes)
+- **Phases 1-5 are complete.** The schema is under `supabase/migrations/`; the
+  XP economy is a tested kernel (`src/lib/economy.ts`) shared by client and
+  server; XP, streaks, habit completion and objective progress are written only
+  by API routes; and the client's grants on those columns are revoked. The
+  devtools XP exploit is dead.
 - the auth-state request storm is fixed — see the note in section 12
-- the app is being taken from "personal tool" to "public signups"; Phases 2-8
-  of that work remain (section 18)
+- the app is being taken from "personal tool" to "public signups"; Phases 6-8
+  remain — auth hardening, CI/monitoring/rate limiting, and GDPR plus the
+  Arena scoring fix (section 18)
 
 ## 17. Known Configuration Issues
 
@@ -686,9 +709,11 @@ in dependency order — the ordering is load-bearing, not preference:
 4. **Phase 4 — client switchover.** Rewrite the writes in `EliteContext`,
    reconcile from server responses, fix the seven error-swallowing `.then(() => {})`
    writes, and ship a build-version reload banner **before** Phase 5.
-5. **Phase 5 — database lockdown.** Column-level grants, `WITH CHECK` on every
-   UPDATE policy, CHECK constraints, and revoking `daily_logs` writes entirely.
-   This is what actually closes the XP hole. Verify with pgTAP.
+5. ~~**Phase 5 — database lockdown.**~~ **Done, August 14, 2026.** Column-level
+   grants, `WITH CHECK` on all five UPDATE policies, 12 CHECK constraints,
+   per-operator row caps, and `daily_logs` writes revoked entirely. Verified
+   against production: six separate exploit attempts all return `42501`, and
+   every legitimate write still works. See section 12.
 6. **Phase 6 — auth hardening.** Password reset, email confirmation, CAPTCHA,
    real SMTP.
 7. **Phase 7 — CI, error monitoring, rate limiting.**
