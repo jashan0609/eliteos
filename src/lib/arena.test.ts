@@ -5,6 +5,7 @@ import {
   buildArenaLeaderboard,
   calculateConsistencyMetrics,
   getDailyDisciplineScore,
+  MIN_TRACKED,
   type ArenaLog,
 } from "./arena.ts";
 
@@ -41,10 +42,20 @@ function week(
 
 describe("getDailyDisciplineScore", () => {
   it("weights non-negotiables at 70% and habits at 30%", () => {
-    // nn 1/2 = 0.5, habits 2/2 = 1.0 -> 0.5*0.7 + 1.0*0.3 = 0.65
+    // Three of each, so no floor applies and the weighting is visible on its
+    // own: nn 1/3, habits 3/3 -> 0.333*0.7 + 1.0*0.3 = 0.533
     assert.equal(
-      getDailyDisciplineScore(log("2026-08-01", { total: 2, done: 1 }, { total: 2, done: 2 })),
-      65
+      getDailyDisciplineScore(log("2026-08-01", { total: 3, done: 1 }, { total: 3, done: 3 })),
+      53
+    );
+  });
+
+  it("measures a short list against MIN_TRACKED, not its own length", () => {
+    // Two non-negotiables, both done. Not 100 — the denominator floors at 3,
+    // so completing everything you tracked is not the same as being complete.
+    assert.equal(
+      getDailyDisciplineScore(log("2026-08-01", { total: 2, done: 2 }, { total: 3, done: 3 })),
+      Math.round((2 / MIN_TRACKED) * 0.7 * 100 + 0.3 * 100)
     );
   });
 
@@ -85,8 +96,10 @@ describe("calculateConsistencyMetrics", () => {
   });
 
   it("scores a perfect week with a full streak at 100", () => {
+    // Three per category is the smallest genuinely perfect week; below that the
+    // denominator floor means "everything I tracked" is not yet "everything".
     const metrics = calculateConsistencyMetrics(
-      week({ total: 2, done: 2 }, { total: 2, done: 2 }),
+      week({ total: 3, done: 3 }, { total: 3, done: 3 }),
       7
     );
 
@@ -100,7 +113,7 @@ describe("calculateConsistencyMetrics", () => {
   it("applies the 20% streak weight", () => {
     // Perfect compliance, zero streak -> (0*0.2 + 1*0.5 + 1*0.3) = 0.8
     const metrics = calculateConsistencyMetrics(
-      week({ total: 2, done: 2 }, { total: 2, done: 2 }),
+      week({ total: 3, done: 3 }, { total: 3, done: 3 }),
       0
     );
 
@@ -125,7 +138,7 @@ describe("calculateConsistencyMetrics", () => {
     const stale = week({ total: 2, done: 0 }, { total: 2, done: 0 }, 7).map(
       (entry, i) => ({ ...entry, date: `2026-07-${String(i + 1).padStart(2, "0")}` })
     );
-    const recent = week({ total: 2, done: 2 }, { total: 2, done: 2 });
+    const recent = week({ total: 3, done: 3 }, { total: 3, done: 3 });
 
     const metrics = calculateConsistencyMetrics([...stale, ...recent], 7);
 
@@ -144,8 +157,10 @@ describe("calculateConsistencyMetrics", () => {
     assert.deepEqual(dates, [...dates].sort());
   });
 
-  it("lets an operator who tracks one habit outrank a heavily-committed operator", () => {
-    // Documents current scoring behavior, not desired behavior — see notes.
+  it("no longer lets a token tracker outrank a committed one", () => {
+    // The bug this fixes: one habit, ticked, used to score a flat 100 and beat
+    // an operator tracking ten things at 80%. The denominator floor is what
+    // closes it.
     const minimal = calculateConsistencyMetrics(
       week({ total: 0, done: 0 }, { total: 1, done: 1 }),
       7
@@ -155,9 +170,35 @@ describe("calculateConsistencyMetrics", () => {
       7
     );
 
-    assert.equal(minimal.score, 100);
     assert.equal(committed.score, 84);
-    assert.ok(minimal.score! > committed.score!);
+    assert.ok(
+      committed.score! > minimal.score!,
+      `committed ${committed.score} should outrank minimal ${minimal.score}`
+    );
+  });
+
+  it("still rewards completing more of the same list", () => {
+    // The floor must not flatten real differences: 5-of-5 has to beat 4-of-5.
+    const all = calculateConsistencyMetrics(week({ total: 5, done: 5 }, { total: 5, done: 5 }), 7);
+    const most = calculateConsistencyMetrics(week({ total: 5, done: 4 }, { total: 5, done: 4 }), 7);
+    assert.ok(all.score! > most.score!);
+  });
+
+  it("documents the residual: a full small list still beats a strong large one", () => {
+    // Known and deliberate. Flooring at MIN_TRACKED fixes 1-of-1, but an
+    // operator tracking exactly three habits and no non-negotiables still
+    // renormalizes to a perfect score. Closing this means deciding whether an
+    // untracked category should score zero rather than drop out — a product
+    // question, not a rounding one.
+    const threeHabitsOnly = calculateConsistencyMetrics(
+      week({ total: 0, done: 0 }, { total: 3, done: 3 }),
+      7
+    );
+    const committed = calculateConsistencyMetrics(
+      week({ total: 5, done: 4 }, { total: 5, done: 4 }),
+      7
+    );
+    assert.ok(threeHabitsOnly.score! > committed.score!);
   });
 });
 

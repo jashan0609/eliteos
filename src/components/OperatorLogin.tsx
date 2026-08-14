@@ -472,10 +472,44 @@ export default function OperatorLogin() {
             </button>
           </p>
         )}
+
+        {/*
+          Registration is the moment consent is given, so the terms have to be
+          reachable from it rather than buried inside the app behind a login.
+        */}
+        <p
+          style={{
+            textAlign: "center",
+            marginTop: "2rem",
+            fontSize: "0.65rem",
+            color: "#555",
+            lineHeight: 1.7,
+          }}
+        >
+          {mode === "register" && (
+            <>
+              By creating an account you agree to the
+              <br />
+            </>
+          )}
+          <a href="/terms" style={legalLink}>
+            Terms of Service
+          </a>
+          {" · "}
+          <a href="/privacy" style={legalLink}>
+            Privacy Policy
+          </a>
+        </p>
       </div>
     </div>
   );
 }
+
+const legalLink: React.CSSProperties = {
+  color: "#777",
+  textDecoration: "underline",
+  textUnderlineOffset: "2px",
+};
 
 const linkButton: React.CSSProperties = {
   background: "none",

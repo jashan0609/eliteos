@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import * as Sentry from "@sentry/nextjs";
 import type { User } from "@supabase/supabase-js";
 import type { ZodType } from "zod";
 import { supabaseAdmin } from "@/lib/supabase-admin";
@@ -132,5 +133,15 @@ export async function parseJsonBody<T>(
  */
 export function serverError(tag: string, err: unknown) {
   console.error(`[${tag}] ${formatError(err)}`);
-  return NextResponse.json({ error: "Something went wrong" }, { status: 500 });
+
+  // No DSN configured means this returns undefined and the body is unchanged.
+  const eventId = Sentry.captureException(err, { tags: { route: tag } });
+
+  return NextResponse.json(
+    // `ref` is the whole point of capturing here: it lets a support
+    // conversation name one specific failure without the response body ever
+    // carrying the constraint and column names `formatError` collects.
+    { error: "Something went wrong", ...(eventId ? { ref: eventId } : {}) },
+    { status: 500 }
+  );
 }

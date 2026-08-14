@@ -3,6 +3,10 @@
     {
       "path": "/api/system/reset",
       "schedule": "0 * * * *"
+    },
+    {
+      "path": "/api/system/cleanup-unconfirmed",
+      "schedule": "30 3 * * *"
     }
   ]
 }

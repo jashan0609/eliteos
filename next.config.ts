@@ -38,7 +38,10 @@ const nextConfig: NextConfig = {
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: blob:",
               "font-src 'self'",
-              "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
+              // Sentry's ingest endpoint. A CSP block here is invisible except
+              // in the browser console — errors would simply never arrive, and
+              // "no errors reported" reads identically to "nothing broke".
+              "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://*.ingest.sentry.io https://*.ingest.us.sentry.io https://*.ingest.de.sentry.io",
               "object-src 'none'",
               "base-uri 'self'",
               "form-action 'self'",

@@ -236,6 +236,9 @@ function haptic(pattern: number | number[] = 30) {
 // client writes to `operator_profile` any more except `updateUsername`, which
 // does its own scoped update. Every XP and streak write goes through the API.
 
+/** Routes that are not the app, and must not boot it. See `dormant` below. */
+const DORMANT_ROUTES = new Set(["/reset-password", "/privacy", "/terms"]);
+
 // ── Provider ──
 
 export function EliteProvider({ children }: { children: ReactNode }) {
@@ -250,12 +253,13 @@ export function EliteProvider({ children }: { children: ReactNode }) {
   const accessToken = session?.access_token ?? null;
 
   // This provider sits in the root layout, so it mounts on every route —
-  // including the ones that exist only to complete an auth flow. A recovery
-  // link creates a real session, which would otherwise be enough for the load
-  // effect below to POST /api/system/sync and run the daily reset from a page
-  // whose only job is changing a password. Stay dormant there.
+  // including ones that are not the app at all. A recovery link creates a real
+  // session, which would otherwise be enough for the load effect below to POST
+  // /api/system/sync and run the daily reset from a page whose only job is
+  // changing a password. The legal pages have the same problem for a signed-in
+  // reader: booting the whole app to render static prose.
   const pathname = usePathname();
-  const dormant = pathname === "/reset-password";
+  const dormant = DORMANT_ROUTES.has(pathname);
   const [state, setState] = useState<EliteState>(DEFAULT_STATE);
   const [loading, setLoading] = useState(true);
   const [arenaLoading, setArenaLoading] = useState(false);

@@ -141,10 +141,11 @@ cross-checks every friendship against an accepted `friend_requests` row and logs
 `[FRIENDSHIP_WITHOUT_ACCEPTED_REQUEST]` for any that fail. That is a deliberate
 tripwire: if it fires, someone has write access they should not have.
 
-Known gap in that tripwire: `remove/route.ts` cancels only *pending* requests on
-unfriend, leaving the `accepted` row behind. Re-adding still works (both guards
-check for a pending row, not an accepted one), but a forged friendship with
-someone previously unfriended would pass the cross-check.
+That tripwire used to be blunted by `remove/route.ts`, which cancelled only
+*pending* requests on unfriend and left the `accepted` row behind — so a forged
+friendship with anyone you had previously unfriended still found its accepted
+row and passed. It now cancels `accepted` too. Re-adding is unaffected: both
+guards in `request/route.ts` look for a *pending* row.
 
 **`daily_logs`** — archived day summaries, feeding the logs UI, the dashboard XP
 chart, and Arena scoring. `(user_id, date)` is UNIQUE; both upsert call sites
@@ -233,6 +234,15 @@ blamed an unset GUC — that diagnosis was wrong, the conclusion was right.)
   invisible — a delete that never reached the database still vanished from the
   UI and reappeared on next load. They now await, roll back, and toast. Do not
   reintroduce fire-and-forget writes.
+- **Unconfirmed-signup cleanup must check `last_sign_in_at`, not just
+  `email_confirmed_at`.** Confirmation was off until Phase 6, so every operator
+  who registered before it has a permanently null `email_confirmed_at`. The
+  obvious rule — "unconfirmed and older than seven days" — would have deleted
+  the entire user base on the cron's first run, cascading through all seven
+  tables. The rule lives in
+  [unconfirmed-cleanup.ts](src/lib/unconfirmed-cleanup.ts), pure and tested, and
+  the never-signed-in clause is negative-tested: removing it fails a test named
+  for exactly this.
 - **PostgREST renders `.eq(col, null)` as `col=eq.null`, which matches nothing.**
   Use `.is(col, null)`. This bit the reset's compare-and-swap guard, where a
   first-ever reset would otherwise always lose its own race.
@@ -260,7 +270,17 @@ blamed an unset GUC — that diagnosis was wrong, the conclusion was right.)
    reset if due and returns authoritative state. Everything else the context
    does on load is a SELECT.
 
-**Not implemented:** email change, account deletion, data export.
+**Not implemented:** email change.
+
+Account deletion and data export ship in
+[api/account](src/app/api/account), surfaced in the Profile tab. Deletion goes
+through `supabaseAdmin.auth.admin.deleteUser` and removes the **auth user**, not
+the profile row — every table FKs `auth.users(id) ON DELETE CASCADE`, so the
+database does the rest in one transaction. Doing it the other way round is what
+Phase 5 revoked the `operator_profile` DELETE grant to prevent: it strands an
+auth account with no profile, which is the bricked state that produced an
+unescapable spinner. The target id comes from the bearer token; there is
+deliberately no parameter naming whose account to delete.
 
 ### Password recovery
 
@@ -307,14 +327,20 @@ streak factor (20%, clamped at 7 days). A score is withheld until 7 days exist.
 Leaderboard sorts by score desc, XP desc, username asc; unscored operators sink
 below every scored one.
 
-> **Known bug, raised to P1.** `getCompletionRate` returns `null` for an empty
-> category and the weights renormalize, so an operator tracking **one** habit
-> scores 100 while one tracking five non-negotiables and five habits at 80%
-> scores 84. **Tracking less raises your ceiling** — on a competitive
-> leaderboard that is the feature being wrong, not a rounding issue.
-> [arena.test.ts](src/lib/arena.test.ts) asserts the *current* behaviour and
-> will fail loudly when this is fixed. That failure is the signal, not a
-> regression. Fix by flooring the denominator (`/ Math.max(items.length, 3)`).
+**`MIN_TRACKED` is why a rate is not simply `completed / tracked`.** Every
+completion denominator floors at 3. Without it, tracking *less* raised your
+ceiling: one habit, ticked, scored a flat 100 and outranked an operator tracking
+five non-negotiables and five habits at 80%. Fixed on August 14, 2026; the tests
+that documented the old behaviour were rewritten to assert the inversion is
+gone.
+
+> **Residual, deliberate and documented by a test.** Flooring fixes 1-of-1, but
+> an empty category still returns `null` and lets the weights renormalize — so
+> an operator tracking exactly three habits and no non-negotiables still scores
+> 100. Closing it means deciding whether an untracked category should score zero
+> instead of dropping out, which would stop anyone from using only half the app.
+> That is a product call, not a bug fix, so it is asserted as current behaviour
+> rather than quietly changed.
 
 ---
 
@@ -324,13 +350,14 @@ below every scored one.
 npm run dev -- --port 3002
 npm run lint
 npm run build
-npm test                  # 84 tests, Node's built-in runner, no framework
+npm test                  # 94 tests, Node's built-in runner, no framework
 npm run preflight:phase5  # audits client source for server-owned column writes
 ```
 
 `npm test` covers `src/**/*.test.ts`: the economy kernel, daily-reset and arena
 logic, the economy route handlers (against an in-memory fake `EconomyDb`, so
-nothing touches Supabase), and the rate-limit policy. Safe to run any time.
+nothing touches Supabase), the rate-limit policy, and the unconfirmed-signup
+cleanup rule. Safe to run any time.
 
 All of it now runs on every push and pull request — see
 [.github/workflows/ci.yml](.github/workflows/ci.yml), which also runs the pgTAP
@@ -412,8 +439,19 @@ A schema change usually needs matching updates in
   correct for local work and CI, and a real hole in production — where the
   module logs `[RATE_LIMIT_DISABLED]` at startup so it is not silent. With no
   CAPTCHA (§3) this is the only abuse control there is.
-- **No error monitoring.** Sentry is not installed; it needs a DSN. Failures
-  reach `console.error` and Vercel's log retention, and nothing alerts.
+- **Sentry is installed but inert.** `NEXT_PUBLIC_SENTRY_DSN` is unset, so
+  `instrumentation.ts` returns without initialising and `serverError` captures
+  nothing. Set the DSN in Vercel to turn it on — no code change needed. The CSP
+  already allows the ingest hosts. `next.config.ts` is deliberately **not**
+  wrapped in `withSentryConfig`: that wrapper only uploads source maps and needs
+  an org, project and auth token, so adding it early buys warnings rather than
+  stack traces. Run the wizard once the account exists.
+- **The legal pages carry placeholders.** `LEGAL_ENTITY` and
+  `LEGAL_CONTACT_EMAIL` in [legal.ts](src/lib/legal.ts) still say "the EliteOS
+  team" and `support@example.com`. GDPR needs a named controller and a monitored
+  address — erasure requests have deadlines. Replace both before public signups.
+- `npm audit` reports 3 high-severity advisories in `sharp`, pulled in by Next
+  and only fixable by bumping Next itself. Nothing in the app calls it.
 - The build-version banner (`x-app-build` → reload prompt) only protects tabs
   loaded since Phase 4 shipped. Older tabs run JS that never checks the header.
 
@@ -435,6 +473,15 @@ A schema change usually needs matching updates in
   `requireUserFromBearer`, `parseJsonBody`, `serverError`. The
   `friends/_lib.ts` re-export shim was deleted in Phase 7; every route imports
   from `_lib/guard` directly.
+- **Account and compliance** — [account/export](src/app/api/account/export/route.ts),
+  [account/delete](src/app/api/account/delete/route.ts) (both surfaced in
+  [ProfileView](src/components/ProfileView.tsx)),
+  [privacy](src/app/privacy/page.tsx) and [terms](src/app/terms/page.tsx) over
+  [LegalPage.tsx](src/components/LegalPage.tsx), with the names and contact in
+  [legal.ts](src/lib/legal.ts)
+- **Monitoring** — [instrumentation.ts](src/instrumentation.ts) (server + edge),
+  [instrumentation-client.ts](src/instrumentation-client.ts),
+  [api/health](src/app/api/health/route.ts)
 - **Rate limiting** — [rate-limit.ts](src/app/api/_lib/rate-limit.ts) (Upstash
   I/O) over [rate-limit-policy.ts](src/app/api/_lib/rate-limit-policy.ts)
   (budgets and fail modes, pure and tested). Called from each route after the
@@ -466,7 +513,7 @@ A schema change usually needs matching updates in
 
 The full plan lives at `~/.claude/plans/lets-make-a-plan-bright-hopper.md`.
 
-**Done (August 11–14, 2026).** Phases 0–5:
+**Done (August 11–14, 2026).** Phases 0–8:
 
 | Phase | Outcome |
 |---|---|
@@ -478,40 +525,65 @@ The full plan lives at `~/.claude/plans/lets-make-a-plan-bright-hopper.md`.
 | 5 | Column-level grants, `WITH CHECK`, CHECK constraints, row caps, pgTAP |
 | 6a | Password recovery end to end; enumeration-safe messages; shared account rules; local auth config tightened |
 | 7a | CI on every push (app + pgTAP grant matrix); rate limiting; `formatError` leak closed |
+| 7b | Sentry wired (inert until a DSN exists); `/api/health` |
+| 8 | Account export + deletion; privacy policy and terms; unconfirmed-signup cleanup; Arena scoring fixed |
 
 Also fixed along the way: the auth-state request storm (§5).
 
-**Remaining**, in dependency order:
+**Remaining.** **The code is done.** What is left is not code — it is credentials and
+settings in third-party dashboards, and it is listed in §12.
 
-6. **Auth hardening — the rest.** The code half shipped (§6). What is left is
-   almost entirely **configuration the dashboard owns**, and none of it is
-   visible in this repo:
-   - Attach real SMTP (**Resend**). Nothing else in this list matters until mail
-     is reliable — a recovery flow with no mail behind it is still a lockout.
-   - Set the recovery email template to use `{{ .TokenHash }}`, so links survive
-     being opened in a different browser (§6).
-   - Mirror the `config.toml` changes into the dashboard: confirmations on,
-     password length 10, `site_url` + `additional_redirect_urls` (production,
-     Vercel preview wildcard, localhost), `max_frequency`, `email_sent`.
-   - Verify a real signup → confirm → login, and a real forgot → reset → login.
-     The flows are verified against Supabase as far as `/auth/v1/recover`
-     returning 200; the leg through an actual inbox is not.
-7. **Monitoring — the rest of Phase 7.** CI, rate limiting and the
-   `formatError` leak are done (7a below). What remains is **Sentry**, which
-   needs a DSN: `npx @sentry/wizard@latest -i nextjs`, then add
-   `https://*.ingest.sentry.io` to `connect-src` in `next.config.ts`, capture
-   inside `serverError` and attach the event id to the response body. Also add
-   `/api/health` plus an uptime check, and alert on `/api/system/reset`
-   returning non-200 — a silently failing reset is invisible until operators
-   complain about streaks.
-   **And provide Upstash credentials**, or the limiter shipped in 7a stays
-   inert (§9).
-8. **Compliance and the Arena fix.** `POST /api/account/delete` via
-   `supabaseAdmin.auth.admin.deleteUser` (the FK cascade is complete),
-   `GET /api/account/export`, privacy policy and terms, cleanup of unconfirmed
-   accounts older than 7 days. Plus the Arena scoring bug in §7.
+Two things are deliberately *not* done and should not be started without asking:
 
-### Live operational notes
+- **The XP economy is net-negative and everyone sits at 0.** See the operational
+  note below. Rebalancing changes how the product feels for every operator, so
+  it is a product decision, not a fix.
+- **The Arena residual in §7** — an untracked category still drops out of the
+  weighting instead of scoring zero.
+
+## 12. What is not code
+
+Everything below needs an account, a card, or a DNS record, so none of it can be
+done from this repo. **The app runs without all of it — it just runs without the
+protection.** Each line says what is actually unprotected until it is done.
+
+### Supabase dashboard (`config.toml` is the local stack only)
+
+| Setting | Value | Until then |
+|---|---|---|
+| Authentication → Emails → SMTP | Attach **Resend** | Built-in sender is capped and unreliable; recovery mail mostly will not arrive |
+| Emails → Templates → Reset Password | `{{ .SiteURL }}/reset-password?token_hash={{ .TokenHash }}&type=recovery` | Reset links die when opened in a different browser than they were requested from (§6) |
+| Sign In → Email | Confirm email **on**, min password length **10** | Signup UI promises a confirmation email nobody sends; the form enforces 10 while the backend accepts 6 |
+| URL Configuration | Production origin + Vercel preview wildcard + `http://localhost:3002/**` | Supabase silently substitutes `site_url`, so operators land on the wrong deployment |
+| Rate Limits → email sent | 30/hour | 2/hour, breached by three simultaneous signups |
+
+Then verify a real signup → confirm → login and a real forgot → reset → login.
+Everything up to `/auth/v1/recover` returning 200 is already verified; the leg
+through an actual inbox is not, and cannot be from here.
+
+### Vercel environment variables
+
+| Variable | Until then |
+|---|---|
+| `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` | Every rate-limit budget allows everything. With no CAPTCHA (§3) that is the entire abuse control. Logs `[RATE_LIMIT_DISABLED]` in production |
+| `NEXT_PUBLIC_SENTRY_DSN` | Nothing reports errors; failures reach `console.error` and Vercel log retention, and nothing alerts |
+
+Both are read at startup — setting them needs a redeploy, not a code change.
+
+### GitHub
+
+Require **both** CI jobs on `main` in branch protection. CI that is not required
+is CI that gets ignored.
+
+### In this repo, but needing facts only the owner has
+
+Replace `LEGAL_ENTITY` and `LEGAL_CONTACT_EMAIL` in
+[legal.ts](src/lib/legal.ts). GDPR requires a named controller and a monitored
+address; erasure requests carry deadlines.
+
+---
+
+## 13. Live operational notes
 
 - 13 registered operators.
 - **Every operator's XP sits at or near 0.** Max daily earn is 75 (2 NNs + 1

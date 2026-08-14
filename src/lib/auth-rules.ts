@@ -32,3 +32,12 @@ export const USERNAME_RULE_TEXT =
  * minimum is checked when a password is set, never when one is verified.
  */
 export const MIN_PASSWORD_LENGTH = 10;
+
+/**
+ * What an operator must type to confirm account deletion.
+ *
+ * Lives here, not in the delete route, because the form needs it too and that
+ * route imports `supabaseAdmin` — importing it from there to get one string
+ * would pull the service-role client into the browser bundle.
+ */
+export const DELETE_CONFIRMATION = "DELETE";

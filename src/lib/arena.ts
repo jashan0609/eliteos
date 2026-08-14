@@ -41,10 +41,23 @@ function roundPercent(value: number) {
   return Math.round(value * 100);
 }
 
+/**
+ * The floor under every completion denominator.
+ *
+ * Without it, a rate is `completed / tracked`, so tracking *less* raises your
+ * ceiling: one habit, ticked, scored a perfect 100, while an operator tracking
+ * five non-negotiables and five habits at 80% scored 84. On a leaderboard whose
+ * entire premise is competing with friends, that is the feature being wrong.
+ *
+ * Flooring at 3 means a rate is measured against at least three commitments,
+ * so 1-of-1 earns 33 and you have to actually track things to score well.
+ */
+export const MIN_TRACKED = 3;
+
 function getCompletionRate(items: { completed: boolean }[]) {
   if (items.length === 0) return null;
   const completed = items.filter((item) => item.completed).length;
-  return completed / items.length;
+  return completed / Math.max(items.length, MIN_TRACKED);
 }
 
 function average(values: number[]) {
