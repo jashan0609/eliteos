@@ -237,7 +237,12 @@ function haptic(pattern: number | number[] = 30) {
 // does its own scoped update. Every XP and streak write goes through the API.
 
 /** Routes that are not the app, and must not boot it. See `dormant` below. */
-const DORMANT_ROUTES = new Set(["/reset-password", "/privacy", "/terms"]);
+const DORMANT_ROUTES = new Set([
+  "/reset-password",
+  "/auth/confirm",
+  "/privacy",
+  "/terms",
+]);
 
 // ── Provider ──
 

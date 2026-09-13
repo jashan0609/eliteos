@@ -324,7 +324,20 @@ Rules that are not obvious from the code:
   Tightening it is a dashboard setting, but see the warning in `config.toml`:
   it may also gate recovery itself.
 
-**`EliteProvider` stays dormant on `/reset-password`.** It sits in the root
+### Signup confirmation
+
+The confirmation email should link to
+[auth/confirm/page.tsx](src/app/auth/confirm/page.tsx) with
+`{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email`, the
+pattern Supabase recommends for PKCE apps. It exists for the same reason
+`/reset-password` prefers `token_hash`: the default `{{ .ConfirmationURL }}`
+returns a `?code=` that only the browser that *signed up* can exchange, and
+people sign up on a laptop and open mail on a phone. On success it signs the
+operator in and hands off to `/`. Because the template uses `{{ .SiteURL }}`,
+confirmation links always point at production, including for signups made on
+localhost.
+
+**`EliteProvider` stays dormant on `/reset-password` and `/auth/confirm`.** It sits in the root
 layout, so it mounts on every route, and a recovery session would otherwise be
 enough for it to POST `/api/system/sync` and run the daily reset from a page
 whose only job is changing a password. Verified: zero API calls on that route.
@@ -479,6 +492,7 @@ A schema change usually needs matching updates in
 - **Auth** — [AuthContext.tsx](src/context/AuthContext.tsx),
   [OperatorLogin.tsx](src/components/OperatorLogin.tsx) (login / register /
   reset), [reset-password/page.tsx](src/app/reset-password/page.tsx),
+  [auth/confirm/page.tsx](src/app/auth/confirm/page.tsx),
   [auth-rules.ts](src/lib/auth-rules.ts) (shared username + password rules),
   [check-username/route.ts](src/app/api/auth/check-username/route.ts)
 - **API guard** — [_lib/guard.ts](src/app/api/_lib/guard.ts) —
@@ -566,6 +580,7 @@ protection.** Each line says what is actually unprotected until it is done.
 |---|---|---|
 | Authentication → Emails → SMTP | Attach **Resend** | Built-in sender is capped and unreliable; recovery mail mostly will not arrive |
 | Emails → Templates → Reset Password | `{{ .SiteURL }}/reset-password?token_hash={{ .TokenHash }}&type=recovery` | Reset links die when opened in a different browser than they were requested from (§6) |
+| Emails → Templates → Confirm signup | `{{ .SiteURL }}/auth/confirm?token_hash={{ .TokenHash }}&type=email` | Confirmation links opened in a different browser than the signup may fail (§6) |
 | Sign In → Email | Confirm email **on**, min password length **10** | Signup UI promises a confirmation email nobody sends; the form enforces 10 while the backend accepts 6 |
 | URL Configuration | Site URL `https://eliteos.vercel.app`; Redirect URLs `https://eliteos.vercel.app/**`, `https://*-jashanubhi8-5572s-projects.vercel.app/**`, `http://localhost:3002/**` | Supabase silently substitutes `site_url`, so operators land on the wrong deployment |
 | Rate Limits → email sent | 30/hour | 2/hour, breached by three simultaneous signups |
