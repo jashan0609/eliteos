@@ -28,8 +28,8 @@ describe("shouldDeleteUnconfirmed", () => {
   });
 
   it("spares anyone who has ever signed in, however old and unconfirmed", () => {
-    // The clause that protects every operator who registered before email
-    // confirmation was turned on. Without it this cron deletes the user base.
+    // Defence in depth: a successful sign-in proves the account is real even if
+    // its confirmation column was never set. Removing the clause fails here.
     assert.equal(
       shouldDeleteUnconfirmed(
         {

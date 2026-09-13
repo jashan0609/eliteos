@@ -19,15 +19,14 @@ export interface CleanupCandidate {
  * True only for accounts that are unconfirmed, have **never signed in**, and
  * are older than the TTL.
  *
- * The never-signed-in clause is the important one. Email confirmation was off
- * until Phase 6, so every operator who registered before it has a permanently
- * null `email_confirmed_at`. The obvious rule — "unconfirmed and older than
- * seven days" — would therefore have deleted the entire existing user base the
- * first time this cron ran, cascading through all seven tables.
+ * The never-signed-in clause is defence in depth. It was written believing that
+ * every operator registered before Phase 6 had a null `email_confirmed_at`.
+ * That was wrong: with confirmation off, Supabase auto-confirms at signup, and
+ * all 13 accounts were confirmed when checked on September 13, 2026.
  *
- * A successful sign-in proves the address reached a real person whatever the
- * confirmation column says, so it is a better signal than a hardcoded cutoff
- * date, which would silently rot.
+ * It stays because it costs nothing and covers any account confirmed, imported
+ * or migrated out of band. A successful sign-in proves the address reached a
+ * real person whatever the confirmation column says.
  */
 export function shouldDeleteUnconfirmed(
   user: CleanupCandidate,

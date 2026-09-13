@@ -80,7 +80,7 @@ export async function runDailyResetForUser(params: {
   );
 
   // Already current for this operator's local day. This guard is what makes
-  // the hourly cron safe: at most one reset lands per local day.
+  // a repeated cron run or a login-time sync safe: at most one reset lands per local day.
   if (profile.last_habit_reset === today) {
     return {
       didReset: false,

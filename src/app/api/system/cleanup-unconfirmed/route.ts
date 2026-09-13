@@ -13,8 +13,7 @@ export const dynamic = "force-dynamic";
  *
  * The rule itself lives in `src/lib/unconfirmed-cleanup.ts`, pure and tested,
  * because a mistake in it deletes real accounts on a schedule with nobody
- * watching. Read the note there before changing it — the naive version of this
- * rule would have deleted every operator who registered before Phase 6.
+ * watching. Read the note there before changing it.
  *
  * Requires `Bearer $CRON_SECRET`, same as the reset sweep.
  */

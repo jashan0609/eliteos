@@ -49,6 +49,12 @@ jobs:
       - name: Phase 5 preflight
         run: npm run preflight:phase5
 
+      # Vercel Hobby rejects crons that run more than once a day, at deploy
+      # time. This is the check that would have caught a month-long silent
+      # deploy outage in August 2026.
+      - name: Vercel cron schedule
+        run: node scripts/check-vercel-crons.mjs
+
       - name: Build
         run: npm run build
         env:

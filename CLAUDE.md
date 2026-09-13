@@ -2,7 +2,7 @@
 
 # EliteOS — Project Memory
 
-Working memory for the EliteOS codebase, current as of **August 14, 2026**.
+Working memory for the EliteOS codebase, current as of **September 13, 2026**.
 
 This file records what is *not* obvious from reading the code: the security
 boundaries and why they exist, the traps that have already cost real debugging
@@ -182,10 +182,14 @@ Audited August 13, 2026 via `select jobid, jobname, schedule, command from cron.
   interval '1 month')`. Do not remove. Known cosmetic flaw: compares against
   `current_date` (UTC) while log dates are written in each operator's local day,
   so someone well ahead of UTC can lose a log a few hours early.
-- **Vercel cron** (`vercel.json`, `0 * * * *`) — hits `/api/system/reset`
-  hourly. **The real reset scheduler.** The `last_habit_reset === today` guard
-  makes it idempotent, so hourly is safe and closes the timezone-lateness
-  window.
+- **Vercel cron** (`vercel.json`, `0 6 * * *`) — hits `/api/system/reset`
+  once a day at 06:00 UTC. **It must stay once a day while the project is on
+  Vercel Hobby** — see §5. 06:00 UTC is after local midnight in every timezone
+  the current operators use (London, Kolkata, UTC, Toronto, Kampala), year-round.
+  Operators who open the app are reset at login by `/api/system/sync`, so the
+  cron only catches people who did not; a skipped day is archived on the next
+  run, because the reset walks every day since `last_habit_reset`.
+- **`cleanup-unconfirmed`** (`vercel.json`, `30 3 * * *`) — daily, see §5.
 
 A third job, `daily-system-reset`, was unscheduled on August 13, 2026. It had
 never worked: its URL was the literal unsubstituted placeholder
@@ -196,6 +200,15 @@ blamed an unset GUC — that diagnosis was wrong, the conclusion was right.)
 
 ## 5. Traps that have already cost real time
 
+- **Vercel Hobby rejects any cron more frequent than once a day, at deploy
+  time.** Phase 0 set the reset to hourly (`0 * * * *`). Every deployment from
+  August 11 onward failed on that one expression, and CI stayed green because
+  CI never validates `vercel.json`. Production kept serving the **June 9**
+  build for a month, against a database the August lockdown had already locked:
+  that old client's habit completions were rejected and its errors swallowed,
+  while the server-side reset kept applying penalties. Found September 13, 2026.
+  **After any push, check the Vercel status on the commit, not just CI:**
+  `gh api repos/jashan0609/eliteos/commits/<sha>/status`.
 - **Never key an effect on the `user` or `session` *object* from `AuthContext`.**
   That context calls `setUser(s?.user ?? null)` on every `onAuthStateChange`
   event, minting a fresh object even when nothing changed. On August 13, 2026
@@ -234,15 +247,14 @@ blamed an unset GUC — that diagnosis was wrong, the conclusion was right.)
   invisible — a delete that never reached the database still vanished from the
   UI and reappeared on next load. They now await, roll back, and toast. Do not
   reintroduce fire-and-forget writes.
-- **Unconfirmed-signup cleanup must check `last_sign_in_at`, not just
-  `email_confirmed_at`.** Confirmation was off until Phase 6, so every operator
-  who registered before it has a permanently null `email_confirmed_at`. The
-  obvious rule — "unconfirmed and older than seven days" — would have deleted
-  the entire user base on the cron's first run, cascading through all seven
-  tables. The rule lives in
-  [unconfirmed-cleanup.ts](src/lib/unconfirmed-cleanup.ts), pure and tested, and
-  the never-signed-in clause is negative-tested: removing it fails a test named
-  for exactly this.
+- **Unconfirmed-signup cleanup deletes only accounts that are unconfirmed,
+  never signed in, and older than seven days.** An earlier version of this note
+  claimed every pre-Phase-6 operator had a null `email_confirmed_at`. That was
+  wrong: with confirmation off, Supabase auto-confirms at signup, and all 13
+  accounts were confirmed when checked on September 13, 2026. The
+  never-signed-in clause stays as defence in depth. The rule lives in
+  [unconfirmed-cleanup.ts](src/lib/unconfirmed-cleanup.ts), pure and tested,
+  and the clause is negative-tested.
 - **PostgREST renders `.eq(col, null)` as `col=eq.null`, which matches nothing.**
   Use `.is(col, null)`. This bit the reset's compare-and-swap guard, where a
   first-ever reset would otherwise always lose its own race.
@@ -517,7 +529,7 @@ The full plan lives at `~/.claude/plans/lets-make-a-plan-bright-hopper.md`.
 
 | Phase | Outcome |
 |---|---|
-| 0 | Friendship forgery closed; signup un-bricked; `anon` grants revoked; hourly cron; resilient reset loop |
+| 0 | Friendship forgery closed; signup un-bricked; `anon` grants revoked; resilient reset loop |
 | 1 | Schema under `supabase/migrations/`; repo and production reconciled; legacy `.sql` deleted |
 | 2 | XP economy extracted to a tested, isomorphic kernel |
 | 3 | Server-authoritative routes with compare-and-swap (additive) |
@@ -527,6 +539,7 @@ The full plan lives at `~/.claude/plans/lets-make-a-plan-bright-hopper.md`.
 | 7a | CI on every push (app + pgTAP grant matrix); rate limiting; `formatError` leak closed |
 | 7b | Sentry wired (inert until a DSN exists); `/api/health` |
 | 8 | Account export + deletion; privacy policy and terms; unconfirmed-signup cleanup; Arena scoring fixed |
+| Fix | Crons made Hobby-compatible (Sept 13) — the first time any of Phases 0–8 reached production |
 
 Also fixed along the way: the auth-state request storm (§5).
 
@@ -535,9 +548,9 @@ settings in third-party dashboards, and it is listed in §12.
 
 Two things are deliberately *not* done and should not be started without asking:
 
-- **The XP economy is net-negative and everyone sits at 0.** See the operational
-  note below. Rebalancing changes how the product feels for every operator, so
-  it is a product decision, not a fix.
+- **The XP economy may be net-negative.** Max earn 75/day against max penalty
+  120/day, floored at 0. Rebalancing is a product decision, not a fix — and the
+  production data cannot settle it yet; see §13.
 - **The Arena residual in §7** — an untracked category still drops out of the
   weighting instead of scoring zero.
 
@@ -554,8 +567,15 @@ protection.** Each line says what is actually unprotected until it is done.
 | Authentication → Emails → SMTP | Attach **Resend** | Built-in sender is capped and unreliable; recovery mail mostly will not arrive |
 | Emails → Templates → Reset Password | `{{ .SiteURL }}/reset-password?token_hash={{ .TokenHash }}&type=recovery` | Reset links die when opened in a different browser than they were requested from (§6) |
 | Sign In → Email | Confirm email **on**, min password length **10** | Signup UI promises a confirmation email nobody sends; the form enforces 10 while the backend accepts 6 |
-| URL Configuration | Production origin + Vercel preview wildcard + `http://localhost:3002/**` | Supabase silently substitutes `site_url`, so operators land on the wrong deployment |
+| URL Configuration | Site URL `https://eliteos.vercel.app`; Redirect URLs `https://eliteos.vercel.app/**`, `https://*-jashanubhi8-5572s-projects.vercel.app/**`, `http://localhost:3002/**` | Supabase silently substitutes `site_url`, so operators land on the wrong deployment |
 | Rate Limits → email sent | 30/hour | 2/hour, breached by three simultaneous signups |
+
+**Order matters: SMTP before "Confirm email".** Without custom SMTP, Supabase
+refuses to deliver to any address outside the project's team, so turning
+confirmation on first would leave every new signup waiting for an email that is
+never sent. Resend in turn needs a domain whose DNS you control — a
+`*.vercel.app` subdomain cannot be verified. Turning confirmation on does not
+affect the existing 13 operators: all are already confirmed.
 
 Then verify a real signup → confirm → login and a real forgot → reset → login.
 Everything up to `/auth/v1/recover` returning 200 is already verified; the leg
@@ -586,11 +606,14 @@ address; erasure requests carry deadlines.
 ## 13. Live operational notes
 
 - 13 registered operators.
-- **Every operator's XP sits at or near 0.** Max daily earn is 75 (2 NNs + 1
-  habit); max daily penalty is 120 (2 × 60). The economy is net-negative unless
-  everything is completed, and XP floors at 0, so penalties are both invisible
-  and permanent. Nobody has ever accumulated. This is a product question, not a
-  bug — but the leaderboard currently ranks everyone at 0.
+- **XP data from August 13 to the September 13 fix is not evidence about the
+  economy.** Production ran the June client against the locked-down database
+  (§5), so completions were rejected while the server-side reset kept applying
+  penalties. On September 13, 2026 XP read 0–15 across all operators with every
+  streak at 0 — that measures the outage. On paper the economy is still
+  net-negative unless everything is completed (max earn 75/day, max penalty
+  120/day, floored at 0). Judge it on data gathered after the fixed build is
+  live.
 - The zero floor is lossy in the other direction too: an operator at 10 XP who
   toggles a habit off and back on lands on 15, a net gain of 5. Bounded, and
   documented by a test in [economy.test.ts](src/lib/economy.test.ts). Closing it
